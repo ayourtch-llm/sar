@@ -119,7 +119,8 @@ impl Actor for TuiActor {
                 let chunks = layout_chunks(frame.area(), show_bottom);
 
                 let log_paragraph = Paragraph::new(snapshot.log_text)
-                    .block(Block::default());
+                    .block(Block::default())
+                    .scroll((snapshot.scroll as u16, snapshot.horizontal_scroll as u16));
                 frame.render_widget(log_paragraph, chunks[0]);
 
                 let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -275,6 +276,12 @@ impl Actor for TuiActor {
                                 state.at_bottom = true;
                                 state.scroll = state.max_scroll(state.visible_lines);
                             }
+                            KeyCode::Left if key.modifiers == KeyModifiers::CONTROL => {
+                                state.horizontal_scroll = state.horizontal_scroll.saturating_sub(10);
+                            }
+                            KeyCode::Right if key.modifiers == KeyModifiers::CONTROL => {
+                                state.horizontal_scroll += 10;
+                            }
                             _ => {}
                         }
                     }
@@ -319,6 +326,7 @@ impl Actor for TuiActor {
 struct RenderSnapshot {
     log_text: Text<'static>,
     scroll: usize,
+    horizontal_scroll: usize,
     scrollable_range: usize,
     input_line: String,
     status_text: Line<'static>,
@@ -344,6 +352,7 @@ impl RenderSnapshot {
         Self {
             log_text: state.render_log(log_height),
             scroll: state.scroll,
+            horizontal_scroll: state.horizontal_scroll,
             scrollable_range: state.max_scroll(log_height),
             input_line: state.input_lines[state.active_line].clone(),
             status_text,
@@ -379,6 +388,7 @@ fn layout_chunks(area: Rect, show_bottom: bool) -> [Rect; 4] {
 struct TuiState {
     log_entries: Vec<String>,
     scroll: usize,
+    horizontal_scroll: usize,
     at_bottom: bool,
     visible_lines: usize,
     input_lines: Vec<String>,
@@ -393,6 +403,7 @@ impl TuiState {
         Self {
             log_entries: Vec::new(),
             scroll: 0,
+            horizontal_scroll: 0,
             at_bottom: true,
             visible_lines: 24,
             input_lines: vec![String::new()],
