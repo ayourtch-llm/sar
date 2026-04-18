@@ -342,6 +342,14 @@ impl Actor for LlmTestLoopToolsActor {
                                 }
                             };
 
+                            {
+                                let mut messages = conversation_messages.lock().await;
+                                messages.push(serde_json::json!({
+                                    "role": "assistant",
+                                    "tool_calls": tool_calls.clone()
+                                }));
+                            }
+
                             let mut tool_results = Vec::new();
                             for tc in &tool_calls {
                                 let func_name = tc["function"]["name"].as_str().unwrap_or("");

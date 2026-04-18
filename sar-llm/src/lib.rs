@@ -77,6 +77,11 @@ impl LlmActor {
             body["tools"] = serde_json::to_value(tools).unwrap();
         }
 
+        let dump = format!("=== LLM Request (index={}) ===\n{}\n=================\n", self.index, serde_json::to_string_pretty(&body).unwrap());
+        if let Err(e) = std::fs::write("/tmp/sar.txt", &dump) {
+            error!("Failed to write dump to /tmp/sar.txt: {}", e);
+        }
+
         let response = client
             .post(format!("{}/chat/completions", config.base_url))
             .header("Authorization", format!("Bearer {}", config.api_key))
@@ -303,15 +308,15 @@ impl Actor for LlmActor {
                                 if let Err(e) = bus.publish(&self.id(), tc_msg).await {
                                     error!("Failed to publish tool calls: {}", e);
                                 }
-                            }
-                            
-                            let out_msg = Message::new(
-                                &self.output_topic,
-                                &self.id(),
-                                full_response,
-                            );
-                            if let Err(e) = bus.publish(&self.id(), out_msg).await {
-                                error!("Failed to publish LLM response: {}", e);
+                            } else {
+                                let out_msg = Message::new(
+                                    &self.output_topic,
+                                    &self.id(),
+                                    full_response,
+                                );
+                                if let Err(e) = bus.publish(&self.id(), out_msg).await {
+                                    error!("Failed to publish LLM response: {}", e);
+                                }
                             }
                         }
                         Err(e) => {
