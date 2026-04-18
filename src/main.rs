@@ -71,6 +71,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     bus.create_topic(&config.topics.echo, 100).await;
     bus.create_topic(&config.topics.reverse, 100).await;
     bus.create_topic(&config.topics.server, 100).await;
+    bus.create_topic("llm:0:in", 100).await;
+    bus.create_topic("llm:0:out", 1000).await;
+    bus.create_topic("llm:0:stream", 1000).await;
 
     // Setup tracing with bus layer
     let bus_layer = sar_tracing::BusLayer::new(

@@ -7,6 +7,7 @@ members = [
     "sar-reverse",
     "sar-server",
     "sar-tracing",
+    "sar-llm",
 ]
 resolver = "2"
 
@@ -26,6 +27,7 @@ sar-echo = { path = "sar-echo" }
 sar-reverse = { path = "sar-reverse" }
 sar-server = { path = "sar-server" }
 sar-tracing = { path = "sar-tracing" }
+sar-llm = { path = "sar-llm" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }

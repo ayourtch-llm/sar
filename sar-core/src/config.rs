@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tracing::info;
 
@@ -10,6 +10,12 @@ pub struct Config {
     pub server: ServerConfig,
     #[serde(default = "default_ui")]
     pub ui: UiConfig,
+    #[serde(default = "default_llm")]
+    pub llm: LlmConfig,
+}
+
+fn default_llm() -> LlmConfig {
+    LlmConfig::default()
 }
 
 fn default_topics() -> TopicsConfig {
@@ -81,6 +87,32 @@ impl Default for UiConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LlmConfig {
+    #[serde(default = "default_llm_model")]
+    pub model: String,
+    #[serde(default = "default_llm_base_url")]
+    pub base_url: String,
+    #[serde(default = "default_llm_api_key")]
+    pub api_key: String,
+    #[serde(default = "default_llm_temperature")]
+    pub temperature: f32,
+    #[serde(default = "default_llm_max_tokens")]
+    pub max_tokens: i32,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            model: default_llm_model(),
+            base_url: default_llm_base_url(),
+            api_key: default_llm_api_key(),
+            temperature: default_llm_temperature(),
+            max_tokens: default_llm_max_tokens(),
+        }
+    }
+}
+
 fn default_log_topic() -> String {
     "sar:log".to_string()
 }
@@ -111,6 +143,26 @@ fn default_port() -> u16 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_llm_model() -> String {
+    "gpt-4o-mini".to_string()
+}
+
+fn default_llm_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+
+fn default_llm_api_key() -> String {
+    String::new()
+}
+
+fn default_llm_temperature() -> f32 {
+    0.7
+}
+
+fn default_llm_max_tokens() -> i32 {
+    2048
 }
 
 impl Config {
