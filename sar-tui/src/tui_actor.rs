@@ -1,12 +1,13 @@
+use std::process::id as pid;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use ratatui::Terminal;
 use sar_core::actor::Actor;
 use sar_core::bus::SarBus;
@@ -15,6 +16,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 const APP_ID: &str = "sar-tui";
+const LIGHT_GRAY: Color = Color::Rgb(211, 211, 211);
 
 #[derive(Debug, Default)]
 pub struct TuiActor {
@@ -94,41 +96,36 @@ impl Actor for TuiActor {
                 let chunks = layout_chunks(frame.area(), snapshot.show_bottom_panel);
 
                 let log_paragraph = Paragraph::new(snapshot.log_text)
-                    .block(Block::default().borders(Borders::ALL).title(" Log "))
+                    .block(Block::default())
                     .scroll((snapshot.scroll, 0));
                 frame.render_widget(log_paragraph, chunks[0]);
 
-                let status_text = Line::from(vec![
-                    Span::styled(
-                        " Status: running ",
-                        Style::default().fg(Color::Green),
-                    ),
-                    Span::raw("  "),
-                    Span::styled(
-                        " Topics: 2 ".to_string(),
-                        Style::default().fg(Color::Yellow),
-                    ),
-                ]);
-                let status_paragraph = Paragraph::new(status_text)
-                    .block(Block::default().borders(Borders::ALL).title(" Status "));
+                let status_paragraph = Paragraph::new(snapshot.status_text)
+                    .block(Block::default().style(Style::default().bg(Color::Black)))
+                    .style(Style::default().fg(Color::Green));
                 frame.render_widget(status_paragraph, chunks[1]);
 
                 let input_text = Text::from(vec![
-                    Line::from(vec![Span::raw("> ")]),
-                    Line::from(snapshot.input_line.as_str()),
+                    Line::from(vec![
+                        Span::styled("> ", Style::default().fg(Color::Yellow)),
+                        Span::raw(snapshot.input_line.as_str()),
+                    ]),
                 ]);
                 let input_paragraph = Paragraph::new(input_text)
-                    .block(Block::default().borders(Borders::ALL).title(" Input "));
+                    .block(Block::default());
                 frame.render_widget(input_paragraph, chunks[2]);
 
                 if snapshot.show_bottom_panel {
-                    let bottom_text = Text::from(vec![
+                    let info_text = Text::from(vec![
                         Line::from(" Ready "),
+                        Line::from(""),
+                        Line::from(" SAR v0.1.0 "),
                         Line::from(" Press /quit or Ctrl+C to quit "),
+                        Line::from(""),
                     ]);
-                    let bottom_paragraph = Paragraph::new(bottom_text)
-                        .block(Block::default().borders(Borders::ALL).title(" Info "));
-                    frame.render_widget(bottom_paragraph, chunks[3]);
+                    let info_paragraph = Paragraph::new(info_text)
+                        .block(Block::default().style(Style::default().bg(LIGHT_GRAY)));
+                    frame.render_widget(info_paragraph, chunks[3]);
                 }
             })?;
 
@@ -206,15 +203,32 @@ struct RenderSnapshot {
     log_text: Text<'static>,
     scroll: u16,
     input_line: String,
+    status_text: Line<'static>,
 }
 
 impl RenderSnapshot {
     fn new(state: &TuiState) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        let seconds = now.as_secs() % 86400;
+        let time_str = format!(
+            "{:02}:{:02}:{:02}",
+            seconds / 3600,
+            (seconds % 3600) / 60,
+            seconds % 60
+        );
+        let status_text = Line::from(format!(
+            " {} | PID {} ",
+            time_str,
+            pid()
+        ));
         Self {
             show_bottom_panel: state.show_bottom_panel,
             log_text: state.render_log(),
             scroll: state.scroll as u16,
             input_line: state.input_lines[state.active_line].clone(),
+            status_text,
         }
     }
 }
@@ -227,7 +241,7 @@ fn layout_chunks(area: Rect, show_bottom: bool) -> [Rect; 4] {
                 Constraint::Min(3),
                 Constraint::Length(1),
                 Constraint::Length(3),
-                Constraint::Length(2),
+                Constraint::Length(5),
             ])
             .split(area)
     } else {
