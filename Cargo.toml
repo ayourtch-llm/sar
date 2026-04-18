@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    ".",
+    "sar-core",
+    "sar-tui",
+    "sar-echo",
+    "sar-server",
+]
+resolver = "2"
+
+[package]
+name = "sar"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "sar"
+path = "src/main.rs"
+
+[dependencies]
+sar-core = { path = "sar-core" }
+sar-tui = { path = "sar-tui" }
+sar-echo = { path = "sar-echo" }
+sar-server = { path = "sar-server" }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
