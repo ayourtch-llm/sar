@@ -221,7 +221,7 @@ fn default_llm_temperature() -> f32 {
 }
 
 fn default_llm_max_tokens() -> i32 {
-    2048
+    65536
 }
 
 fn default_ui_hub_name() -> String {

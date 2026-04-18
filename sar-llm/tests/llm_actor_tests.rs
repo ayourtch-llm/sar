@@ -24,7 +24,7 @@ async fn setup_test_actors(mock_url: &str) -> (
             base_url: mock_url.to_string(),
             api_key: "sk-test".to_string(),
             temperature: 0.7,
-            max_tokens: 2048,
+            max_tokens: 65536,
         },
     );
 

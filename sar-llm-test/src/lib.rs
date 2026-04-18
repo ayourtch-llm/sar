@@ -87,7 +87,7 @@ impl Actor for LlmTestActor {
                                         base_url: self.llm_base_url.clone(),
                                         api_key: String::new(),
                                         temperature: 0.7,
-                                        max_tokens: 2048,
+                                        max_tokens: 65536,
                                     })
                                 },
                             };
