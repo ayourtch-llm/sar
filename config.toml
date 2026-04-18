@@ -18,3 +18,5 @@ base_url = "http://ayourtch-desktop:8000/v1"
 api_key = ""
 temperature = 0.699999988079071
 max_tokens = 2048
+
+[ui_hubs]
