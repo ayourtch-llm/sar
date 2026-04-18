@@ -13,8 +13,6 @@ pub struct Config {
     pub ui: UiConfig,
     #[serde(default = "default_llm")]
     pub llm: LlmConfig,
-    #[serde(default = "default_llm_tools")]
-    pub llm_tools: LlmToolsConfig,
     #[serde(default)]
     pub ui_hubs: HashMap<String, UiHubConfig>,
 }
@@ -41,7 +39,6 @@ impl Default for Config {
             server: ServerConfig::default(),
             ui: UiConfig::default(),
             llm: LlmConfig::default(),
-            llm_tools: LlmToolsConfig::default(),
             ui_hubs: hubs,
         }
     }
@@ -243,28 +240,6 @@ fn default_ui_hub_buffer_size() -> usize {
     1000
 }
 
-fn default_llm_tools() -> LlmToolsConfig {
-    LlmToolsConfig::default()
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct LlmToolsConfig {
-    #[serde(default = "default_calculator_base_url")]
-    pub calculator_base_url: String,
-}
-
-impl Default for LlmToolsConfig {
-    fn default() -> Self {
-        Self {
-            calculator_base_url: default_calculator_base_url(),
-        }
-    }
-}
-
-fn default_calculator_base_url() -> String {
-    "http://localhost:8080".to_string()
-}
-
 impl Config {
     pub fn from_file(path: &Path) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(path)
@@ -291,7 +266,6 @@ impl Config {
         root.as_table_mut().unwrap().insert("server".to_string(), to_toml_value(&self.server));
         root.as_table_mut().unwrap().insert("ui".to_string(), to_toml_value(&self.ui));
         root.as_table_mut().unwrap().insert("llm".to_string(), to_toml_value(&self.llm));
-        root.as_table_mut().unwrap().insert("llm_tools".to_string(), to_toml_value(&self.llm_tools));
 
         let mut hubs_table = toml::Value::Table(toml::map::Map::new());
         for (name, hub) in &self.ui_hubs {

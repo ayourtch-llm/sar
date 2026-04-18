@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "llm:0:stream".to_string(),
         "llm-test-tools:0:stream".to_string(),
     )
-    .with_tool(CalculatorTool::new("http://localhost:8080".to_string()));
+    .with_tool(CalculatorTool::new());
 
     println!("LLM Test Loop Tools actor ready");
     tokio::signal::ctrl_c().await?;

@@ -184,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "llm:0:stream".to_string(),
         "llm-test-tools:0:stream".to_string(),
     )
-    .with_tool(CalculatorTool::new(config.llm_tools.calculator_base_url.clone()));
+    .with_tool(CalculatorTool::new());
     (*bus).spawn_actor(llm_test_tools_actor).await?;
 
     // Spawn server (detached - runs in background)

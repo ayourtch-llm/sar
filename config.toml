@@ -19,9 +19,6 @@ api_key = ""
 temperature = 0.7
 max_tokens = 65536
 
-[llm_tools]
-calculator_base_url = "http://localhost:8080"
-
 [ui_hubs.default]
 name = "default"
 user_topic = "ui:user"

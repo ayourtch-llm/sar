@@ -4,14 +4,12 @@ use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub struct CalculatorTool {
-    pub base_url: String,
     parameters: Value,
 }
 
 impl CalculatorTool {
-    pub fn new(base_url: String) -> Self {
+    pub fn new() -> Self {
         Self {
-            base_url,
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -33,7 +31,7 @@ impl Tool for CalculatorTool {
     }
 
     fn description(&self) -> &str {
-        "Evaluate mathematical expressions. Supports basic arithmetic (+, -, *, /), parentheses, and common functions like sin, cos, tan, sqrt, log, exp, pow."
+        "Evaluate mathematical expressions. Supports basic arithmetic (+, -, *, /), parentheses, bitwise operators (&, |, ^, <<, >>), comparisons (==, !=, >, >=, <, <=), modulo (%), string concatenation, and the ternary conditional operator (a ? b : c)."
     }
 
     fn parameters(&self) -> &Value {
@@ -46,31 +44,9 @@ impl Tool for CalculatorTool {
             .and_then(|v| v.as_str())
             .ok_or("Missing 'expression' argument")?;
 
-        let client = reqwest::Client::new();
-        let url = format!("{}/evaluate", self.base_url);
+        let result = aycalc::eval(expression)
+            .map_err(|e| format!("aycalc error: {:?}", e))?;
 
-        let response = client
-            .post(&url)
-            .json(&serde_json::json!({ "expression": expression }))
-            .send()
-            .await
-            .map_err(|e| format!("Failed to send request to aycalc: {}", e))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("aycalc error {}: {}", status, body));
-        }
-
-        let result = response
-            .json::<Value>()
-            .await
-            .map_err(|e| format!("Failed to parse aycalc response: {}", e))?;
-
-        Ok(result
-            .get("result")
-            .or_else(|| result.get("answer"))
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| result.to_string()))
+        Ok(result.to_string())
     }
 }
