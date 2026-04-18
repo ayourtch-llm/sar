@@ -15,6 +15,11 @@ pub struct LlmRequest {
     pub config: Option<LlmConfig>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamEnd {
+    pub r#type: String,
+}
+
 #[derive(Debug, Default)]
 pub struct LlmActor {
     pub index: usize,
@@ -110,6 +115,15 @@ impl LlmActor {
                     }
                 }
             }
+        }
+
+        let end_msg = Message::new(
+            &self.stream_topic,
+            &self.id(),
+            serde_json::to_string(&StreamEnd { r#type: "stream_end".to_string() }).unwrap(),
+        );
+        if let Err(e) = bus.publish(&self.id(), end_msg).await {
+            error!("Failed to publish stream end: {}", e);
         }
 
         Ok(full_response)

@@ -26,15 +26,17 @@ pub struct TuiActor {
     user_topic: String,
     input_topic: String,
     bottom_panel_topic: String,
+    stream_topic: String,
     show_bottom_panel: bool,
 }
 
 impl TuiActor {
-    pub fn new(user_topic: String, input_topic: String, bottom_panel_topic: String, show_bottom_panel: bool) -> Self {
+    pub fn new(user_topic: String, input_topic: String, bottom_panel_topic: String, stream_topic: String, show_bottom_panel: bool) -> Self {
         Self {
             user_topic,
             input_topic,
             bottom_panel_topic,
+            stream_topic,
             show_bottom_panel,
         }
     }
@@ -80,7 +82,12 @@ impl Actor for TuiActor {
                             serde_json::Value::String(s) => s.clone(),
                             _ => msg.payload.to_string(),
                         };
-                        let text = format!("[{}] {}", msg.source, display);
+                        let meta_type = msg.meta.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        let text = if meta_type == "UserInput" {
+                            format!("> {}", display)
+                        } else {
+                            format!("[{}] {}", msg.source, display)
+                        };
                         let mut state = state_clone.lock().await;
                         state.add_log_entry(text);
                     }
@@ -123,6 +130,50 @@ impl Actor for TuiActor {
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             info!("Bottom panel topic channel closed");
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+
+        {
+            let bus_clone = bus.clone();
+            let state_clone = state.clone();
+            let stream_topic_clone = self.stream_topic.clone();
+            tokio::spawn(async move {
+                let mut rx = match bus_clone.subscribe(APP_ID, &stream_topic_clone).await {
+                    Ok(rx) => rx,
+                    Err(e) => {
+                        error!("Failed to subscribe to stream topic: {}", e);
+                        return;
+                    }
+                };
+                loop {
+                    match rx.recv().await {
+                        Ok(msg) => {
+                            let mut state = state_clone.lock().await;
+                            if let serde_json::Value::String(ref s) = msg.payload {
+                                if let Ok(stream_end) = serde_json::from_str::<serde_json::Value>(s) {
+                                    if let Some(type_val) = stream_end.get("type").and_then(|t| t.as_str()) {
+                                        if type_val == "stream_end" {
+                                            state.finalize_stream();
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                            let display = match &msg.payload {
+                                serde_json::Value::String(s) => s.clone(),
+                                _ => msg.payload.to_string(),
+                            };
+                            state.append_stream_chunk(&display);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("TUI stream reader lagged behind, dropped {} messages", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            info!("Stream topic channel closed");
                             break;
                         }
                     }
@@ -537,6 +588,7 @@ struct TuiState {
     show_bottom_panel: bool,
     current_target: String,
     last_key: String,
+    streaming_active: bool,
 }
 
 impl TuiState {
@@ -566,6 +618,7 @@ impl TuiState {
             show_bottom_panel,
             current_target: input_topic,
             last_key: String::new(),
+            streaming_active: false,
         }
     }
 
@@ -586,6 +639,54 @@ impl TuiState {
         if self.log_items.len() > 1000 {
             self.log_items.drain(..100);
         }
+        if self.at_bottom {
+            self.scroll = self.max_scroll(self.visible_lines);
+        }
+    }
+
+    fn append_stream_chunk(&mut self, chunk: &str) {
+        if !self.streaming_active {
+            self.log_items.push(LogItem {
+                text: String::new(),
+                height: 1,
+            });
+            self.streaming_active = true;
+        }
+        let parts: Vec<&str> = chunk.split('\n').collect();
+        for (i, part) in parts.iter().enumerate() {
+            let is_last = i == parts.len() - 1;
+            if let Some(last_item) = self.log_items.last_mut() {
+                last_item.text.push_str(part);
+                last_item.height = last_item.text.matches('\n').count() + 1;
+            } else {
+                let height = part.matches('\n').count() + 1;
+                self.log_items.push(LogItem {
+                    text: part.to_string(),
+                    height,
+                });
+            }
+            if !is_last {
+                let new_height = 1;
+                self.log_items.push(LogItem {
+                    text: String::new(),
+                    height: new_height,
+                });
+                if self.at_bottom {
+                    self.scroll = self.max_scroll(self.visible_lines);
+                }
+            }
+        }
+        if self.at_bottom {
+            self.scroll = self.max_scroll(self.visible_lines);
+        }
+    }
+
+    fn finalize_stream(&mut self) {
+        if let Some(last_item) = self.log_items.last_mut() {
+            last_item.text.push('\n');
+            last_item.height = last_item.text.matches('\n').count() + 1;
+        }
+        self.streaming_active = false;
         if self.at_bottom {
             self.scroll = self.max_scroll(self.visible_lines);
         }

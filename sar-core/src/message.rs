@@ -1,6 +1,24 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum LogItemType {
+    UserInput,
+    System,
+    LlmStream,
+    LlmResponse,
+    Log,
+    Info,
+    Error,
+    Warning,
+}
+
+impl Default for LogItemType {
+    fn default() -> Self {
+        LogItemType::Info
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     #[serde(default)]
@@ -8,6 +26,8 @@ pub struct Message {
     pub topic: String,
     pub source: String,
     pub payload: serde_json::Value,
+    #[serde(default)]
+    pub meta: serde_json::Value,
 }
 
 impl Message {
@@ -21,6 +41,7 @@ impl Message {
             topic: topic.into(),
             source: source.into(),
             payload: payload.into(),
+            meta: serde_json::Value::Null,
         }
     }
 
@@ -35,6 +56,7 @@ impl Message {
             topic: topic.into(),
             source: source.into(),
             payload: payload.into(),
+            meta: serde_json::Value::Null,
         }
     }
 

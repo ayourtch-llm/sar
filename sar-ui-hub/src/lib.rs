@@ -91,6 +91,19 @@ impl Actor for UiHubActor {
                             error!("UI hub '{}' failed to route to '{}': {}", self.config.name, route_topic, e);
                         }
                     }
+                    let user_msg = Message::new(
+                        &self.config.user_topic,
+                        &msg.source,
+                        msg.payload.clone(),
+                    );
+                    let mut meta = serde_json::Map::new();
+                    meta.insert("type".to_string(), serde_json::Value::String("UserInput".to_string()));
+                    let meta_value = serde_json::Value::Object(meta);
+                    let mut user_msg = user_msg;
+                    user_msg.meta = meta_value;
+                    if let Err(e) = bus.publish(&hub_id, user_msg).await {
+                        error!("UI hub '{}' failed to publish user input to user topic: {}", self.config.name, e);
+                    }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     warn!("UI hub '{}' input subscriber lagged behind, dropped {} messages", self.config.name, n);

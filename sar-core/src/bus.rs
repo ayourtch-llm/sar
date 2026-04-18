@@ -121,12 +121,12 @@ impl SarBus {
             }
         }
 
-        let mut subscribers = self.topic_subscribers.write().await;
-        let subs = subscribers.entry(topic.to_string()).or_insert_with(std::collections::HashSet::new);
-        subs.insert(actor_id.to_string());
-
-        let mut publishers = self.topic_publishers.write().await;
-        if !is_subscription {
+        if is_subscription {
+            let mut subscribers = self.topic_subscribers.write().await;
+            let subs = subscribers.entry(topic.to_string()).or_insert_with(std::collections::HashSet::new);
+            subs.insert(actor_id.to_string());
+        } else {
+            let mut publishers = self.topic_publishers.write().await;
             let pubs = publishers.entry(topic.to_string()).or_insert_with(std::collections::HashSet::new);
             pubs.insert(actor_id.to_string());
         }
