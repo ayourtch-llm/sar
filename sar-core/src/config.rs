@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
@@ -12,8 +13,8 @@ pub struct Config {
     pub ui: UiConfig,
     #[serde(default = "default_llm")]
     pub llm: LlmConfig,
-    #[serde(default = "default_ui_hubs")]
-    pub ui_hubs: Vec<UiHubConfig>,
+    #[serde(default)]
+    pub ui_hubs: HashMap<String, UiHubConfig>,
 }
 
 fn default_llm() -> LlmConfig {
@@ -30,10 +31,6 @@ fn default_server() -> ServerConfig {
 
 fn default_ui() -> UiConfig {
     UiConfig::default()
-}
-
-fn default_ui_hubs() -> Vec<UiHubConfig> {
-    vec![UiHubConfig::default()]
 }
 
 #[derive(Debug, Deserialize)]

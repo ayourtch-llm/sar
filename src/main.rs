@@ -81,7 +81,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     bus.create_topic("ui:input", 100).await;
 
     // Spawn UI hub actors
-    for hub_config in &config.ui_hubs {
+    for (name, hub_config) in &config.ui_hubs {
+        info!("Spawning UI hub '{}'", name);
         let hub_actor = UiHubActor::new(hub_config.clone());
         (*bus).spawn_actor(hub_actor).await?;
     }
@@ -157,9 +158,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
 
     // Spawn TUI actor (this blocks until the user quits)
+    let first_hub = config.ui_hubs.values().next()
+        .ok_or("No UI hub configured")?;
     let tui_actor = sar_tui::TuiActor::new(
-        config.ui_hubs[0].user_topic.clone(),
-        config.ui_hubs[0].input_topic.clone(),
+        first_hub.user_topic.clone(),
+        first_hub.input_topic.clone(),
         config.ui.show_bottom_panel,
     );
     (*bus).spawn_actor(tui_actor).await?.wait().await?;
