@@ -86,16 +86,21 @@ impl Actor for TuiActor {
                             serde_json::Value::String(s) => s.clone(),
                             _ => msg.payload.to_string(),
                         };
-                        let text = if meta_type == "UserInput" {
-                            format!("> {}", display)
-                        } else {
-                            format!("[{}] {}", msg.source, display)
-                        };
                         let mut state = state_clone.lock().await;
                         let is_stream = meta_type == "LlmStream";
-                        if is_stream {
-                            state.add_stream_chunk(text);
+                        let stream_id = if is_stream {
+                            msg.meta.get("stream_id").and_then(|s| s.as_str()).map(|s| s.to_string())
                         } else {
+                            None
+                        };
+                        if is_stream {
+                            state.add_stream_chunk(display, stream_id);
+                        } else {
+                            let text = if meta_type == "UserInput" {
+                                format!("> {}", display)
+                            } else {
+                                format!("[{}] {}", msg.source, display)
+                            };
                             state.add_log_entry(text);
                         }
                     }
@@ -533,6 +538,7 @@ fn layout_chunks(area: Rect, show_bottom: bool) -> [Rect; 4] {
 
 #[derive(Debug, Clone)]
 struct LogItem {
+    item_id: String,
     text: String,
     height: usize,
 }
@@ -552,7 +558,7 @@ struct TuiState {
     show_bottom_panel: bool,
     current_target: String,
     last_key: String,
-    streaming_active: bool,
+    streaming_item_id: Option<String>,
 }
 
 impl TuiState {
@@ -560,8 +566,10 @@ impl TuiState {
         let mut bottom_items = Vec::new();
         if show_bottom_panel {
             for line in [" Ready ", "", " SAR v0.1.0 ", " Press /quit or Ctrl+C to quit ", ""] {
+                let item_id = uuid::Uuid::new_v4().to_string();
                 let height = line.matches('\n').count() + 1;
                 bottom_items.push(LogItem {
+                    item_id,
                     text: line.to_string(),
                     height,
                 });
@@ -582,7 +590,7 @@ impl TuiState {
             show_bottom_panel,
             current_target: input_topic,
             last_key: String::new(),
-            streaming_active: false,
+            streaming_item_id: None,
         }
     }
 
@@ -595,8 +603,10 @@ impl TuiState {
     }
 
     fn add_log_entry(&mut self, entry: String) {
+        let item_id = uuid::Uuid::new_v4().to_string();
         let height = entry.matches('\n').count() + 1;
         self.log_items.push(LogItem {
+            item_id,
             text: entry,
             height,
         });
@@ -608,17 +618,47 @@ impl TuiState {
         }
     }
 
-    fn add_stream_chunk(&mut self, chunk: String) {
-        if !self.streaming_active {
-            self.log_items.push(LogItem {
-                text: chunk,
-                height: 1,
-            });
-            self.streaming_active = true;
-        } else {
-            if let Some(last_item) = self.log_items.last_mut() {
-                last_item.text.push_str(&chunk);
-                last_item.height = last_item.text.matches('\n').count() + 1;
+    fn add_stream_chunk(&mut self, chunk: String, stream_id: Option<String>) {
+        let segments: Vec<&str> = chunk.split('\n').collect();
+        for (i, segment) in segments.iter().enumerate() {
+            let is_last = i == segments.len() - 1;
+            if self.streaming_item_id.is_none() {
+                let item_id = match stream_id {
+                    Some(ref id) => id.clone(),
+                    None => uuid::Uuid::new_v4().to_string(),
+                };
+                self.streaming_item_id = Some(item_id.clone());
+                self.log_items.push(LogItem {
+                    item_id,
+                    text: segment.to_string(),
+                    height: 1,
+                });
+                if is_last {
+                    continue;
+                }
+                let new_item_id = uuid::Uuid::new_v4().to_string();
+                self.streaming_item_id = Some(new_item_id.clone());
+                self.log_items.push(LogItem {
+                    item_id: new_item_id,
+                    text: String::new(),
+                    height: 0,
+                });
+                continue;
+            }
+            if let Some(active_id) = &self.streaming_item_id {
+                if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
+                    item.text.push_str(segment);
+                    item.height = item.text.matches('\n').count() + 1;
+                    if !is_last {
+                        let new_item_id = uuid::Uuid::new_v4().to_string();
+                        self.streaming_item_id = Some(new_item_id.clone());
+                        self.log_items.push(LogItem {
+                            item_id: new_item_id,
+                            text: String::new(),
+                            height: 0,
+                        });
+                    }
+                }
             }
         }
         if self.at_bottom {
@@ -627,11 +667,13 @@ impl TuiState {
     }
 
     fn finalize_stream(&mut self) {
-        if let Some(last_item) = self.log_items.last_mut() {
-            last_item.text.push('\n');
-            last_item.height = last_item.text.matches('\n').count() + 1;
+        if let Some(active_id) = &self.streaming_item_id {
+            if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
+                item.text.push('\n');
+                item.height = item.text.matches('\n').count() + 1;
+            }
         }
-        self.streaming_active = false;
+        self.streaming_item_id = None;
         if self.at_bottom {
             self.scroll = self.max_scroll(self.visible_lines);
         }
@@ -648,8 +690,10 @@ impl TuiState {
     }
 
     fn add_bottom_entry(&mut self, entry: String) {
+        let item_id = uuid::Uuid::new_v4().to_string();
         let height = entry.matches('\n').count() + 1;
         self.bottom_items.push(LogItem {
+            item_id,
             text: entry,
             height,
         });

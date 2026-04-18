@@ -18,14 +18,21 @@ impl UiHubActor {
 
 fn classify_message(topic: &str, payload: &serde_json::Value) -> &'static str {
     if topic.ends_with(":stream") {
-        if let serde_json::Value::String(s) = payload {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(s) {
-                if let Some(type_val) = json.get("type").and_then(|t| t.as_str()) {
-                    if type_val == "stream_end" {
-                        return "LlmStreamEnd";
-                    }
+        let is_stream_end = match payload {
+            serde_json::Value::String(s) => {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(s) {
+                    json.get("type").and_then(|t| t.as_str()) == Some("stream_end")
+                } else {
+                    false
                 }
             }
+            serde_json::Value::Object(map) => {
+                map.get("type").and_then(|t| t.as_str()) == Some("stream_end")
+            }
+            _ => false,
+        };
+        if is_stream_end {
+            return "LlmStreamEnd";
         }
         return "LlmStream";
     }
