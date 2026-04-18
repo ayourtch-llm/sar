@@ -169,7 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tui_actor = sar_tui::TuiActor::new(
         first_hub.user_topic.clone(),
         first_hub.input_topic.clone(),
-        config.topics.log.clone(),
+        first_hub.user_topic.clone(),
         config.ui.show_bottom_panel,
     );
     (*bus).spawn_actor(tui_actor).await?.wait().await?;
