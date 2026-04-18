@@ -90,6 +90,7 @@ impl Actor for LlmTestActor {
                                         max_tokens: 65536,
                                     })
                                 },
+                                tools: None,
                             };
 
                             let msg = Message::new(

@@ -7,6 +7,8 @@ use clap::Parser;
 use sar_core::{Config, SarBus};
 use sar_llm::LlmActor;
 use sar_llm_test_loop::LlmTestLoopActor;
+use sar_llm_test_loop_tools::LlmTestLoopToolsActor;
+use sar_llm_test_loop_tools::calculator::CalculatorTool;
 use sar_ui_hub::UiHubActor;
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
@@ -88,6 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     bus.create_topic("llm-test:0:stream", 1000).await;
     bus.create_topic("llm-test-loop:0:in", 100).await;
     bus.create_topic("llm-test-loop:0:stream", 1000).await;
+    bus.create_topic("llm-test-tools:0:in", 100).await;
+    bus.create_topic("llm-test-tools:0:stream", 1000).await;
     bus.create_topic("ui:user", 1000).await;
     bus.create_topic("ui:input", 100).await;
 
@@ -170,6 +174,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "llm-test-loop:0:stream".to_string(),
     );
     (*bus).spawn_actor(llm_test_loop_actor).await?;
+
+    // Spawn LLM test loop tools actor
+    let llm_test_tools_actor = LlmTestLoopToolsActor::new(
+        0,
+        "llm-test-tools:0:in".to_string(),
+        "llm:0:in".to_string(),
+        "llm:0:out".to_string(),
+        "llm:0:stream".to_string(),
+        "llm-test-tools:0:stream".to_string(),
+    )
+    .with_tool(CalculatorTool::new(config.llm_tools.calculator_base_url.clone()));
+    (*bus).spawn_actor(llm_test_tools_actor).await?;
 
     // Spawn server (detached - runs in background)
     let bus_for_server = bus.clone();

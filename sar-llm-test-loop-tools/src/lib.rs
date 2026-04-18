@@ -9,8 +9,19 @@ use tokio::sync::Mutex;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{error, info, warn};
 
-#[derive(Debug, Default)]
-pub struct LlmTestLoopActor {
+pub mod calculator;
+pub use calculator::CalculatorTool;
+
+#[async_trait]
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn parameters(&self) -> &serde_json::Value;
+    async fn execute(&self, arguments: &serde_json::Value) -> Result<String, String>;
+}
+
+#[derive(Default)]
+pub struct LlmTestLoopToolsActor {
     pub index: usize,
     pub input_topic: String,
     pub llm_in_topic: String,
@@ -18,10 +29,18 @@ pub struct LlmTestLoopActor {
     pub llm_stream_topic: String,
     pub stream_output_topic: String,
     pub llm_base_url: String,
+    pub tools: Vec<Box<dyn Tool>>,
 }
 
-impl LlmTestLoopActor {
-    pub fn new(index: usize, input_topic: String, llm_in_topic: String, llm_out_topic: String, llm_stream_topic: String, stream_output_topic: String) -> Self {
+impl LlmTestLoopToolsActor {
+    pub fn new(
+        index: usize,
+        input_topic: String,
+        llm_in_topic: String,
+        llm_out_topic: String,
+        llm_stream_topic: String,
+        stream_output_topic: String,
+    ) -> Self {
         Self {
             index,
             input_topic,
@@ -30,6 +49,7 @@ impl LlmTestLoopActor {
             llm_stream_topic,
             stream_output_topic,
             llm_base_url: String::new(),
+            tools: Vec::new(),
         }
     }
 
@@ -37,12 +57,17 @@ impl LlmTestLoopActor {
         self.llm_base_url = base_url;
         self
     }
+
+    pub fn with_tool(mut self, tool: impl Tool + 'static) -> Self {
+        self.tools.push(Box::new(tool));
+        self
+    }
 }
 
 #[async_trait::async_trait]
-impl Actor for LlmTestLoopActor {
+impl Actor for LlmTestLoopToolsActor {
     fn id(&self) -> sar_core::ActorId {
-        format!("sar-llm-test-loop-{}", self.index)
+        format!("sar-llm-test-loop-tools-{}", self.index)
     }
 
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -60,9 +85,26 @@ impl Actor for LlmTestLoopActor {
             format!("Failed to subscribe to stream topic '{}': {}", self.llm_stream_topic, e)
         })?;
 
+        let tool_defs: Vec<serde_json::Value> = self
+            .tools
+            .iter()
+            .map(|tool| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name(),
+                        "description": tool.description(),
+                        "parameters": tool.parameters(),
+                    }
+                })
+            })
+            .collect();
+
         info!(
-            "LLM test loop actor {} listening on '{}'",
-            self.index, self.input_topic
+            "LLM test loop tools actor {} listening on '{}' with {} tools",
+            self.index,
+            self.input_topic,
+            self.tools.len()
         );
 
         loop {
@@ -83,7 +125,7 @@ impl Actor for LlmTestLoopActor {
                                 history.len()
                             };
                             info!(
-                                "LLM test loop actor {} received user message, conversation size: {}",
+                                "LLM test loop tools actor {} received user message, conversation size: {}",
                                 self.index, history_len
                             );
 
@@ -105,7 +147,11 @@ impl Actor for LlmTestLoopActor {
                                         max_tokens: 65536,
                                     })
                                 },
-                                tools: None,
+                                tools: if tool_defs.is_empty() {
+                                    None
+                                } else {
+                                    Some(tool_defs.clone())
+                                },
                             };
 
                             let msg = Message::new(
@@ -121,12 +167,12 @@ impl Actor for LlmTestLoopActor {
                         }
                         Err(RecvError::Lagged(n)) => {
                             warn!(
-                                "LLM test loop actor {} lagged behind, dropped {} messages",
+                                "LLM test loop tools actor {} lagged behind, dropped {} messages",
                                 self.index, n
                             );
                         }
                         Err(RecvError::Closed) => {
-                            info!("LLM test loop actor {} input topic closed", self.index);
+                            info!("LLM test loop tools actor {} input topic closed", self.index);
                             break;
                         }
                     }
@@ -147,18 +193,18 @@ impl Actor for LlmTestLoopActor {
                                 history.len()
                             };
                             info!(
-                                "LLM test loop actor {} received full response, conversation size: {}",
+                                "LLM test loop tools actor {} received full response, conversation size: {}",
                                 self.index, history_len
                             );
                         }
                         Err(RecvError::Lagged(n)) => {
                             warn!(
-                                "LLM test loop actor {} lagged behind on output, dropped {} messages",
+                                "LLM test loop tools actor {} lagged behind on output, dropped {} messages",
                                 self.index, n
                             );
                         }
                         Err(RecvError::Closed) => {
-                            info!("LLM test loop actor {} output topic closed", self.index);
+                            info!("LLM test loop tools actor {} output topic closed", self.index);
                         }
                     }
                 }
@@ -187,12 +233,12 @@ impl Actor for LlmTestLoopActor {
                         }
                         Err(RecvError::Lagged(n)) => {
                             warn!(
-                                "LLM test loop actor {} lagged behind on stream, dropped {} messages",
+                                "LLM test loop tools actor {} lagged behind on stream, dropped {} messages",
                                 self.index, n
                             );
                         }
                         Err(RecvError::Closed) => {
-                            info!("LLM test loop actor {} stream topic closed", self.index);
+                            info!("LLM test loop tools actor {} stream topic closed", self.index);
                         }
                     }
                 }

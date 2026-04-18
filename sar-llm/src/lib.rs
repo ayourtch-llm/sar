@@ -13,6 +13,8 @@ pub struct LlmRequest {
     pub prompt: String,
     #[serde(default)]
     pub config: Option<LlmConfig>,
+    #[serde(default)]
+    pub tools: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,19 +57,20 @@ impl LlmActor {
         }
     }
 
-    async fn send_request(&self, config: &LlmConfig, prompt: &str, bus: &SarBus) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    async fn send_request(&self, config: &LlmConfig, messages: &[serde_json::Value], tools: Option<&[serde_json::Value]>, bus: &SarBus) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let stream_id = uuid::Uuid::new_v4().to_string();
         let client = reqwest::Client::new();
         
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": config.model,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
+            "messages": messages,
             "temperature": config.temperature,
             "max_tokens": config.max_tokens,
             "stream": true
         });
+        if let Some(tools) = tools {
+            body["tools"] = serde_json::to_value(tools).unwrap();
+        }
 
         let response = client
             .post(format!("{}/chat/completions", config.base_url))
@@ -220,7 +223,11 @@ impl Actor for LlmActor {
 
                     let config = self.merge_config(request.config);
                     
-                    let result = self.send_request(&config, &request.prompt, bus).await;
+                    let mut messages_vec = vec![
+                        serde_json::json!({"role": "user", "content": request.prompt})
+                    ];
+                    let tools = request.tools.as_deref();
+                    let result = self.send_request(&config, &messages_vec, tools, bus).await;
                     
                     match result {
                         Ok(full_response) => {

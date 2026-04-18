@@ -8,7 +8,7 @@ members = [
     "sar-server",
     "sar-tracing",
     "sar-llm",
-    "sar-llm-test", "sar-llm-test-loop", "sar-ui-hub",
+    "sar-llm-test", "sar-llm-test-loop", "sar-llm-test-loop-tools", "sar-ui-hub",
 ]
 resolver = "2"
 
@@ -31,6 +31,7 @@ sar-tracing = { path = "sar-tracing" }
 sar-llm = { path = "sar-llm" }
 sar-llm-test = { path = "sar-llm-test" }
 sar-llm-test-loop = { path = "sar-llm-test-loop" }
+sar-llm-test-loop-tools = { path = "sar-llm-test-loop-tools" }
 sar-ui-hub = { path = "sar-ui-hub" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
