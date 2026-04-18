@@ -48,7 +48,7 @@ impl LlmActor {
         }
     }
 
-    async fn send_request(&self, config: &LlmConfig, prompt: &str) -> Result<(String, Vec<String>), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send_request(&self, config: &LlmConfig, prompt: &str, bus: &SarBus) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let client = reqwest::Client::new();
         
         let body = serde_json::json!({
@@ -76,7 +76,6 @@ impl LlmActor {
         }
 
         let mut full_response = String::new();
-        let mut chunks = Vec::new();
         let mut stream = response.bytes_stream();
 
         while let Some(chunk) = stream.next().await {
@@ -97,7 +96,14 @@ impl LlmActor {
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
                         if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
                             if !content.is_empty() {
-                                chunks.push(content.to_string());
+                                let chunk_msg = Message::new(
+                                    &self.stream_topic,
+                                    &self.id(),
+                                    content.to_string(),
+                                );
+                                if let Err(e) = bus.publish(chunk_msg).await {
+                                    error!("Failed to publish stream chunk: {}", e);
+                                }
                                 full_response.push_str(content);
                             }
                         }
@@ -106,7 +112,7 @@ impl LlmActor {
             }
         }
 
-        Ok((full_response, chunks))
+        Ok(full_response)
     }
 }
 
@@ -138,23 +144,12 @@ impl Actor for LlmActor {
 
                     let config = self.merge_config(request.config);
                     
-                    let result = self.send_request(&config, &request.prompt).await;
+                    let result = self.send_request(&config, &request.prompt, bus).await;
                     
                     match result {
-                        Ok((full_response, chunks)) => {
+                        Ok(full_response) => {
                             info!("LLM actor {} completed request", self.index);
                             
-                            for chunk in &chunks {
-                                let chunk_msg = Message::new(
-                                    &self.stream_topic,
-                                    &self.id(),
-                                    chunk.clone(),
-                                );
-                                if let Err(e) = bus.publish(chunk_msg).await {
-                                    error!("Failed to publish stream chunk: {}", e);
-                                }
-                            }
-
                             let out_msg = Message::new(
                                 &self.output_topic,
                                 &self.id(),
