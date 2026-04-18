@@ -93,6 +93,7 @@ impl Actor for LlmTestLoopActor {
                             };
 
                             let llm_request = LlmRequest {
+                                messages: None,
                                 prompt: conversation_text,
                                 config: if self.llm_base_url.is_empty() {
                                     None

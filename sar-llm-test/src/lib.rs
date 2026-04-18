@@ -78,6 +78,7 @@ impl Actor for LlmTestActor {
                             };
 
                             let llm_request = LlmRequest {
+                                messages: None,
                                 prompt,
                                 config: if self.llm_base_url.is_empty() {
                                     None

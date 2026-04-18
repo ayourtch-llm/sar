@@ -10,6 +10,9 @@ use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRequest {
+    #[serde(default)]
+    pub messages: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
     pub prompt: String,
     #[serde(default)]
     pub config: Option<LlmConfig>,
@@ -270,9 +273,12 @@ impl Actor for LlmActor {
 
                     let config = self.merge_config(request.config);
                     
-                    let messages_vec = vec![
-                        serde_json::json!({"role": "user", "content": request.prompt})
-                    ];
+                    let messages_vec: Vec<serde_json::Value> = if let Some(ref messages) = request.messages {
+                        messages.clone()
+                    } else {
+                        vec![serde_json::json!({"role": "user", "content": request.prompt})]
+                    };
+                    info!("LLM actor {} sending {} messages to API", self.index, messages_vec.len());
                     let tools = request.tools.as_deref();
                     let result = self.send_request(&config, &messages_vec, tools, bus).await;
                     

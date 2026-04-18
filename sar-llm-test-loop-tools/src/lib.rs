@@ -73,13 +73,16 @@ impl LlmTestLoopToolsActor {
     async fn send_conversation(
         &self,
         bus: &SarBus,
-        conversation_history: &[String],
+        messages: &[serde_json::Value],
         tool_defs: &[serde_json::Value],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let conversation_text = conversation_history.join("\n");
-
         let llm_request = LlmRequest {
-            prompt: conversation_text,
+            messages: if messages.is_empty() {
+                None
+            } else {
+                Some(messages.to_vec())
+            },
+            prompt: String::new(),
             config: if self.llm_base_url.is_empty() {
                 None
             } else {
@@ -119,7 +122,7 @@ impl Actor for LlmTestLoopToolsActor {
     }
 
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let conversation_history: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let conversation_messages: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
 
         let mut input_rx = bus.subscribe(&self.id(), &self.input_topic).await.map_err(|e| {
             format!("Failed to subscribe to input topic '{}': {}", self.input_topic, e)
@@ -169,19 +172,22 @@ impl Actor for LlmTestLoopToolsActor {
                                 None => msg.payload.to_string(),
                             };
                             {
-                                let mut history = conversation_history.lock().await;
-                                history.push(format!("User: {}", user_message));
+                                let mut messages = conversation_messages.lock().await;
+                                messages.push(serde_json::json!({
+                                    "role": "user",
+                                    "content": user_message
+                                }));
                             }
-                            let history_len = {
-                                let history = conversation_history.lock().await;
-                                history.len()
+                            let msg_count = {
+                                let messages = conversation_messages.lock().await;
+                                messages.len()
                             };
                             info!(
-                                "LLM test loop tools actor {} received user message, conversation size: {}",
-                                self.index, history_len
+                                "LLM test loop tools actor {} received user message, message count: {}",
+                                self.index, msg_count
                             );
 
-                            if let Err(e) = self.send_conversation(bus, &conversation_history.lock().await, &tool_defs).await {
+                            if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
                                 error!("Failed to send conversation: {}", e);
                             }
                         }
@@ -205,16 +211,19 @@ impl Actor for LlmTestLoopToolsActor {
                                 _ => msg.payload.to_string(),
                             };
                             {
-                                let mut history = conversation_history.lock().await;
-                                history.push(format!("Assistant: {}", output));
+                                let mut messages = conversation_messages.lock().await;
+                                messages.push(serde_json::json!({
+                                    "role": "assistant",
+                                    "content": output
+                                }));
                             }
-                            let history_len = {
-                                let history = conversation_history.lock().await;
-                                history.len()
+                            let msg_count = {
+                                let messages = conversation_messages.lock().await;
+                                messages.len()
                             };
                             info!(
-                                "LLM test loop tools actor {} received full response, conversation size: {}",
-                                self.index, history_len
+                                "LLM test loop tools actor {} received full response, message count: {}",
+                                self.index, msg_count
                             );
                         }
                         Err(RecvError::Lagged(n)) => {
@@ -265,6 +274,7 @@ impl Actor for LlmTestLoopToolsActor {
                             for tc in &tool_calls {
                                 let func_name = tc["function"]["name"].as_str().unwrap_or("");
                                 let func_args_str = tc["function"]["arguments"].as_str().unwrap_or("");
+                                let tool_call_id = tc["id"].as_str().unwrap_or("");
                                 
                                 info!("LLM test loop tools actor {} executing tool call: {}({})", self.index, func_name, func_args_str);
 
@@ -274,7 +284,7 @@ impl Actor for LlmTestLoopToolsActor {
                                         Err(e) => {
                                             error!("Failed to parse tool arguments for {}: {}", func_name, e);
                                             tool_results.push(serde_json::json!({
-                                                "tool_call_id": tc["id"],
+                                                "tool_call_id": tool_call_id,
                                                 "name": func_name,
                                                 "content": format!("Error parsing arguments: {}", e),
                                             }));
@@ -286,7 +296,7 @@ impl Actor for LlmTestLoopToolsActor {
                                         Ok(result) => {
                                             info!("LLM test loop tools actor {} tool {} result: {}", self.index, func_name, result);
                                             tool_results.push(serde_json::json!({
-                                                "tool_call_id": tc["id"],
+                                                "tool_call_id": tool_call_id,
                                                 "name": func_name,
                                                 "content": result,
                                             }));
@@ -294,7 +304,7 @@ impl Actor for LlmTestLoopToolsActor {
                                         Err(e) => {
                                             error!("LLM test loop tools actor {} tool {} error: {}", self.index, func_name, e);
                                             tool_results.push(serde_json::json!({
-                                                "tool_call_id": tc["id"],
+                                                "tool_call_id": tool_call_id,
                                                 "name": func_name,
                                                 "content": format!("Error: {}", e),
                                             }));
@@ -303,24 +313,28 @@ impl Actor for LlmTestLoopToolsActor {
                                 } else {
                                     warn!("LLM test loop tools actor {} tool '{}' not found", self.index, func_name);
                                     tool_results.push(serde_json::json!({
-                                        "tool_call_id": tc["id"],
+                                        "tool_call_id": tool_call_id,
                                         "name": func_name,
                                         "content": format!("Error: tool '{}' not found", func_name),
                                     }));
                                 }
                             }
 
-                            for tr in &tool_results {
-                                let content = tr["content"].as_str().unwrap_or("");
-                                {
-                                    let mut history = conversation_history.lock().await;
-                                    history.push(format!("ToolResult: tool={}, result={}", tr["name"], content));
+                            {
+                                let mut messages = conversation_messages.lock().await;
+                                for tr in &tool_results {
+                                    messages.push(serde_json::json!({
+                                        "role": "tool",
+                                        "tool_call_id": tr["tool_call_id"],
+                                        "name": tr["name"],
+                                        "content": tr["content"],
+                                    }));
                                 }
                             }
 
-                            info!("LLM test loop tools actor {} sending tool results back to LLM, conversation size: {}", self.index, conversation_history.lock().await.len());
+                            info!("LLM test loop tools actor {} sending tool results back to LLM, message count: {}", self.index, conversation_messages.lock().await.len());
                             
-                            if let Err(e) = self.send_conversation(bus, &conversation_history.lock().await, &tool_defs).await {
+                            if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
                                 error!("Failed to send tool results to LLM: {}", e);
                             }
                         }
