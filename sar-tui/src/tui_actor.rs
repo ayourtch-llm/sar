@@ -357,7 +357,7 @@ impl RenderSnapshot {
             log_text: state.render_log(),
             scroll: state.scroll,
             horizontal_scroll: state.horizontal_scroll,
-            total_lines: state.log_entries.len(),
+            total_lines: state.total_rendered_lines(),
             visible_lines: state.visible_lines,
             input_line: state.input_lines[state.active_line].clone(),
             status_text,
@@ -390,8 +390,14 @@ fn layout_chunks(area: Rect, show_bottom: bool) -> [Rect; 4] {
     [chunks[0], chunks[1], chunks[2], chunks[3]]
 }
 
+#[derive(Debug, Clone)]
+struct LogItem {
+    text: String,
+    height: usize,
+}
+
 struct TuiState {
-    log_entries: Vec<String>,
+    log_items: Vec<LogItem>,
     scroll: usize,
     horizontal_scroll: usize,
     at_bottom: bool,
@@ -407,7 +413,7 @@ struct TuiState {
 impl TuiState {
     fn new(show_bottom_panel: bool, input_topic: String) -> Self {
         Self {
-            log_entries: Vec::new(),
+            log_items: Vec::new(),
             scroll: 0,
             horizontal_scroll: 0,
             at_bottom: true,
@@ -422,17 +428,20 @@ impl TuiState {
     }
 
     fn max_scroll(&self, visible_lines: usize) -> usize {
-        if self.log_entries.len() <= visible_lines {
-            0
-        } else {
-            self.log_entries.len() - visible_lines
-        }
+        self.total_rendered_lines().saturating_sub(visible_lines)
+    }
+
+    fn total_rendered_lines(&self) -> usize {
+        self.log_items.iter().map(|item| item.height).sum()
     }
 
     fn add_log_entry(&mut self, entry: String) {
-        self.log_entries.push(entry);
-        if self.log_entries.len() > 1000 {
-            self.log_entries.drain(..100);
+        self.log_items.push(LogItem {
+            text: entry,
+            height: 1,
+        });
+        if self.log_items.len() > 1000 {
+            self.log_items.drain(..100);
         }
         if self.at_bottom {
             self.scroll = self.max_scroll(self.visible_lines);
@@ -440,9 +449,12 @@ impl TuiState {
     }
 
     fn render_log(&self) -> Text<'static> {
-        let lines: Vec<Line<'static>> = self.log_entries
+        let lines: Vec<Line<'static>> = self.log_items
             .iter()
-            .map(|line| Line::from(line.clone()))
+            .flat_map(|item| {
+                std::iter::repeat_with(|| Line::from(item.text.clone()))
+                    .take(item.height)
+            })
             .collect();
         Text::from(lines)
     }
