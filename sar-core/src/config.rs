@@ -4,15 +4,27 @@ use tracing::info;
 
 #[derive(Debug, Deserialize, Default)]
 pub struct Config {
-    #[serde(default)]
+    #[serde(default = "default_topics")]
     pub topics: TopicsConfig,
-    #[serde(default)]
+    #[serde(default = "default_server")]
     pub server: ServerConfig,
-    #[serde(default)]
+    #[serde(default = "default_ui")]
     pub ui: UiConfig,
 }
 
-#[derive(Debug, Deserialize, Default)]
+fn default_topics() -> TopicsConfig {
+    TopicsConfig::default()
+}
+
+fn default_server() -> ServerConfig {
+    ServerConfig::default()
+}
+
+fn default_ui() -> UiConfig {
+    UiConfig::default()
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TopicsConfig {
     #[serde(default = "default_log_topic")]
     pub log: String,
@@ -26,7 +38,19 @@ pub struct TopicsConfig {
     pub server: String,
 }
 
-#[derive(Debug, Deserialize, Default)]
+impl Default for TopicsConfig {
+    fn default() -> Self {
+        Self {
+            log: default_log_topic(),
+            input: default_input_topic(),
+            echo: default_echo_topic(),
+            reverse: default_reverse_topic(),
+            server: default_server_topic(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ServerConfig {
     #[serde(default = "default_host")]
     pub host: String,
@@ -34,10 +58,27 @@ pub struct ServerConfig {
     pub port: u16,
 }
 
-#[derive(Debug, Deserialize, Default)]
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            host: default_host(),
+            port: default_port(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UiConfig {
     #[serde(default = "default_true")]
     pub show_bottom_panel: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            show_bottom_panel: default_true(),
+        }
+    }
 }
 
 fn default_log_topic() -> String {
