@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,18 +9,36 @@ use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::fmt::MakeWriter;
 
+enum LogTarget {
+    Stderr,
+    File(PathBuf),
+}
+
 struct LogWriter {
-    enabled: bool,
+    target: LogTarget,
+}
+
+impl LogWriter {
+    fn new(target: LogTarget) -> Self {
+        Self { target }
+    }
 }
 
 impl<'a> MakeWriter<'a> for LogWriter {
     type Writer = Box<dyn Write + Send + Sync>;
     
     fn make_writer(&self) -> Self::Writer {
-        if self.enabled {
-            Box::new(std::io::stderr())
-        } else {
-            Box::new(std::io::sink())
+        match &self.target {
+            LogTarget::Stderr => Box::new(std::io::stderr()),
+            LogTarget::File(path) => {
+                match File::options().append(true).create(true).open(path) {
+                    Ok(file) => Box::new(file),
+                    Err(e) => {
+                        eprintln!("Failed to open log file '{}': {}", path.display(), e);
+                        Box::new(std::io::stderr())
+                    }
+                }
+            }
         }
     }
 }
@@ -35,9 +54,9 @@ struct Cli {
     #[arg(short, long, default_value = "false")]
     verbose: bool,
 
-    /// Enable console logging output
-    #[arg(long, default_value = "false")]
-    log: bool,
+    /// Log to file (if path given) or stderr (if just --log)
+    #[arg(long, value_name = "FILE")]
+    log: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -73,7 +92,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tracing_subscriber::EnvFilter::new("info")
     };
     
-    let log_writer = LogWriter { enabled: cli.log };
+    let log_writer = match cli.log {
+        Some(path) => LogWriter::new(LogTarget::File(path)),
+        None => LogWriter::new(LogTarget::Stderr),
+    };
     
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
