@@ -70,6 +70,64 @@ impl LlmTestLoopToolsActor {
         self.tools.iter().find(|t| t.name() == name).map(|t| t.as_ref())
     }
 
+    fn format_dump(&self, messages: &[serde_json::Value], tool_defs: &[serde_json::Value]) -> String {
+        let mut dump = String::new();
+        dump.push_str("=== LLM Request Dump ===\n\n");
+        
+        dump.push_str("Model: (default)\n");
+        dump.push_str(&format!("Temperature: 0.7\n"));
+        dump.push_str(&format!("Max tokens: 65536\n\n"));
+        
+        if !tool_defs.is_empty() {
+            dump.push_str("Tools:\n");
+            for tool in tool_defs {
+                let name = tool["function"]["name"].as_str().unwrap_or("");
+                let desc = tool["function"]["description"].as_str().unwrap_or("");
+                dump.push_str(&format!("  - {}:\n", name));
+                dump.push_str(&format!("    {}\n", desc));
+            }
+            dump.push('\n');
+        }
+        
+        dump.push_str("Messages:\n");
+        for (i, msg) in messages.iter().enumerate() {
+            let role = msg["role"].as_str().unwrap_or("unknown");
+            dump.push_str(&format!("\n--- Message {} ({}): ---\n", i + 1, role));
+            
+            match role {
+                "user" => {
+                    let content = msg["content"].as_str().unwrap_or("");
+                    dump.push_str(&format!("{}\n", content));
+                }
+                "assistant" => {
+                    let content = msg["content"].as_str().unwrap_or("");
+                    dump.push_str(&format!("{}\n", content));
+                    if let Some(tool_calls) = msg["tool_calls"].as_array() {
+                        for tc in tool_calls {
+                            let func_name = tc["function"]["name"].as_str().unwrap_or("");
+                            let args = tc["function"]["arguments"].as_str().unwrap_or("");
+                            dump.push_str(&format!("  [tool_call] {}({})\n", func_name, args));
+                        }
+                    }
+                }
+                "tool" => {
+                    let tool_call_id = msg["tool_call_id"].as_str().unwrap_or("");
+                    let name = msg["name"].as_str().unwrap_or("");
+                    let content = msg["content"].as_str().unwrap_or("");
+                    dump.push_str(&format!("  tool_call_id: {}\n", tool_call_id));
+                    dump.push_str(&format!("  name: {}\n", name));
+                    dump.push_str(&format!("  result: {}\n", content));
+                }
+                _ => {
+                    dump.push_str(&format!("{:?}\n", msg));
+                }
+            }
+        }
+        
+        dump.push_str("\n=== End Dump ===\n");
+        dump
+    }
+
     async fn send_conversation(
         &self,
         bus: &SarBus,
@@ -171,6 +229,20 @@ impl Actor for LlmTestLoopToolsActor {
                                 Some(s) => s.to_string(),
                                 None => msg.payload.to_string(),
                             };
+
+                            if user_message.starts_with("/dump") {
+                                let dump_text = self.format_dump(&conversation_messages.lock().await, &tool_defs);
+                                let dump_msg = Message::new(
+                                    &self.stream_output_topic,
+                                    &self.id(),
+                                    dump_text,
+                                ).with_type("LlmDump");
+                                if let Err(e) = bus.publish(&self.id(), dump_msg).await {
+                                    error!("Failed to publish dump: {}", e);
+                                }
+                                continue;
+                            }
+
                             {
                                 let mut messages = conversation_messages.lock().await;
                                 messages.push(serde_json::json!({

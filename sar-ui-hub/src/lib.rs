@@ -19,7 +19,7 @@ impl UiHubActor {
 fn classify_message(topic: &str, payload: &serde_json::Value, meta: &serde_json::Value) -> String {
     if let serde_json::Value::Object(meta_obj) = meta {
         if let Some(existing_type) = meta_obj.get("type").and_then(|t| t.as_str()) {
-            if matches!(existing_type, "LlmThinking" | "LlmStream" | "LlmStreamEnd" | "LlmToolCall" | "LlmToolResult" | "StreamStats") {
+            if matches!(existing_type, "LlmThinking" | "LlmStream" | "LlmStreamEnd" | "LlmToolCall" | "LlmToolResult" | "LlmDump" | "StreamStats") {
                 return existing_type.to_string();
             }
         }

@@ -119,6 +119,10 @@ impl Actor for TuiActor {
                             state.thinking_item_id = None;
                             state.streaming_item_id = None;
                             state.add_log_entry(format!("  [tool_result] {}", display));
+                        } else if meta_type == "LlmDump" {
+                            state.thinking_item_id = None;
+                            state.streaming_item_id = None;
+                            state.add_dump_entry(display);
                         } else {
                             state.thinking_item_id = None;
                             let text = if meta_type == "UserInput" {
@@ -567,6 +571,7 @@ struct LogItem {
     item_id: String,
     text: String,
     height: usize,
+    is_dump: bool,
 }
 
 struct TuiState {
@@ -600,6 +605,7 @@ impl TuiState {
                     item_id,
                     text: line.to_string(),
                     height,
+                    is_dump: false,
                 });
             }
         }
@@ -639,6 +645,7 @@ impl TuiState {
             item_id,
             text: entry,
             height,
+            is_dump: false,
         });
         if self.log_items.len() > 1000 {
             self.log_items.drain(..100);
@@ -662,6 +669,7 @@ impl TuiState {
                     item_id,
                     text: segment.to_string(),
                     height: 1,
+                    is_dump: false,
                 });
                 if is_last {
                     continue;
@@ -672,6 +680,7 @@ impl TuiState {
                     item_id: new_item_id,
                     text: String::new(),
                     height: 0,
+                    is_dump: false,
                 });
                 continue;
             }
@@ -686,6 +695,7 @@ impl TuiState {
                             item_id: new_item_id,
                             text: String::new(),
                             height: 0,
+                            is_dump: false,
                         });
                     }
                 }
@@ -710,6 +720,7 @@ impl TuiState {
                     item_id,
                     text: format!("  [thinking] {}", segment),
                     height: 1,
+                    is_dump: false,
                 });
                 if is_last {
                     continue;
@@ -720,6 +731,7 @@ impl TuiState {
                     item_id: new_item_id,
                     text: "  [thinking] ".to_string(),
                     height: 1,
+                    is_dump: false,
                 });
                 continue;
             }
@@ -734,6 +746,7 @@ impl TuiState {
                             item_id: new_item_id,
                             text: "  [thinking] ".to_string(),
                             height: 1,
+                            is_dump: false,
                         });
                     }
                 }
@@ -746,6 +759,23 @@ impl TuiState {
 
     fn update_rxtokens(&mut self, new_rxtokens: usize) {
         self.rxtokens = new_rxtokens;
+    }
+
+    fn add_dump_entry(&mut self, text: String) {
+        let item_id = uuid::Uuid::new_v4().to_string();
+        let height = text.matches('\n').count() + 1;
+        self.log_items.push(LogItem {
+            item_id,
+            text,
+            height,
+            is_dump: true,
+        });
+        if self.log_items.len() > 1000 {
+            self.log_items.drain(..100);
+        }
+        if self.at_bottom {
+            self.scroll = self.max_scroll(self.visible_lines);
+        }
     }
 
     fn finalize_stream(&mut self) {
@@ -772,6 +802,8 @@ impl TuiState {
                         Line::from(part.to_string()).style(Style::default().fg(Color::Yellow))
                     } else if part.starts_with("  [tool_result] ") {
                         Line::from(part.to_string()).style(Style::default().fg(Color::Green))
+                    } else if item.is_dump {
+                        Line::from(part.to_string()).style(Style::default().fg(Color::Cyan))
                     } else {
                         Line::from(part.to_string())
                     }
@@ -788,6 +820,7 @@ impl TuiState {
             item_id,
             text: entry,
             height,
+            is_dump: false,
         });
         if self.bottom_items.len() > 100 {
             self.bottom_items.drain(..10);
