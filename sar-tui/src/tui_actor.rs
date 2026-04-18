@@ -65,7 +65,11 @@ impl Actor for TuiActor {
             loop {
                 match rx.recv().await {
                     Ok(msg) => {
-                        let text = format!("{}: {}", msg.source, msg.payload);
+                        let display = match &msg.payload {
+                            serde_json::Value::String(s) => s.clone(),
+                            _ => msg.payload.to_string(),
+                        };
+                        let text = format!("[{}] {}", msg.source, display);
                         let mut state = state_clone.lock().await;
                         state.add_log_entry(text);
                     }
@@ -120,7 +124,7 @@ impl Actor for TuiActor {
                 if snapshot.show_bottom_panel {
                     let bottom_text = Text::from(vec![
                         Line::from(" Ready "),
-                        Line::from(" Press Ctrl+C to quit "),
+                        Line::from(" Press /quit or Ctrl+C to quit "),
                     ]);
                     let bottom_paragraph = Paragraph::new(bottom_text)
                         .block(Block::default().borders(Borders::ALL).title(" Info "));
@@ -150,6 +154,9 @@ impl Actor for TuiActor {
                                 state.active_line += 1;
                             } else {
                                 let input = state.input_lines.join("\n");
+                                if input.trim() == "/quit" {
+                                    break;
+                                }
                                 if !input.is_empty() {
                                     let msg = Message::text(
                                         &state.input_topic,
