@@ -169,6 +169,8 @@ impl Actor for TuiActor {
 
                 match &event {
                     Event::Key(key) => {
+                        let key_str = format!("{:?} {:?}", key.modifiers, key.code);
+                        state.last_key = key_str;
                         match key.code {
                             KeyCode::Left if key.modifiers == KeyModifiers::CONTROL => {
                                 state.horizontal_scroll = state.horizontal_scroll.saturating_sub(10);
@@ -346,9 +348,10 @@ impl RenderSnapshot {
             seconds % 60
         );
         let status_text = Line::from(format!(
-            " {} | PID {} ",
+            " {} | PID {} | {} ",
             time_str,
-            pid()
+            pid(),
+            if state.last_key.is_empty() { "" } else { &state.last_key }
         ));
         Self {
             log_text: state.render_log(),
@@ -398,6 +401,7 @@ struct TuiState {
     focus_input: bool,
     show_bottom_panel: bool,
     current_target: String,
+    last_key: String,
 }
 
 impl TuiState {
@@ -413,6 +417,7 @@ impl TuiState {
             focus_input: true,
             show_bottom_panel,
             current_target: input_topic,
+            last_key: String::new(),
         }
     }
 
