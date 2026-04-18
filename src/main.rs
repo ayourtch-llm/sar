@@ -61,37 +61,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = if cli.config.exists() {
         Config::from_file(&cli.config)?
     } else {
-        let default_toml = r#"[topics]
-log = "sar:log"
-input = "sar:input"
-echo = "sar:echo"
-reverse = "sar:reverse"
-server = "sar:server"
-
-[server]
-host = "127.0.0.1"
-port = 3000
-
-[ui]
-show_bottom_panel = true
-
-[llm]
-model = "gpt-4o-mini"
-base_url = "http://ayourtch-desktop:8000/v1"
-api_key = ""
-temperature = 0.7
-max_tokens = 2048
-
-[ui_hubs.default]
-name = "default"
-user_topic = "ui:user"
-input_topic = "ui:input"
-buffer_size = 1000
-subscribe_to = ["sar:log", "sar:echo", "sar:reverse", "sar:llm:stream"]
-route_to = ["sar:llm-test:0:in"]
-"#;
-        let default_config = Config::from_str(default_toml)?;
-        std::fs::write(&cli.config, default_toml)
+        let default_config = Config::default();
+        let default_toml = default_config.to_toml()
+            .map_err(|e| format!("Failed to serialize default config: {}", e))?;
+        std::fs::write(&cli.config, &default_toml)
             .map_err(|e| format!("Failed to write default config to '{}': {}", cli.config.display(), e))?;
         info!("Created default config at: {}", cli.config.display());
         default_config

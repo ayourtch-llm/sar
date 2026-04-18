@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
-#[derive(Debug, Deserialize, Default, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default = "default_topics")]
     pub topics: TopicsConfig,
@@ -13,8 +13,35 @@ pub struct Config {
     pub ui: UiConfig,
     #[serde(default = "default_llm")]
     pub llm: LlmConfig,
-    #[serde(default = "default_ui_hubs")]
+    #[serde(default)]
     pub ui_hubs: HashMap<String, UiHubConfig>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        let mut hubs = HashMap::new();
+        let default_hub = UiHubConfig {
+            name: "default".to_string(),
+            user_topic: "ui:user".to_string(),
+            input_topic: "ui:input".to_string(),
+            buffer_size: 1000,
+            subscribe_to: vec![
+                "sar:log".to_string(),
+                "sar:echo".to_string(),
+                "sar:reverse".to_string(),
+                "sar:llm:stream".to_string(),
+            ],
+            route_to: vec!["sar:llm-test:0:in".to_string()],
+        };
+        hubs.insert("default".to_string(), default_hub);
+        Self {
+            topics: TopicsConfig::default(),
+            server: ServerConfig::default(),
+            ui: UiConfig::default(),
+            llm: LlmConfig::default(),
+            ui_hubs: hubs,
+        }
+    }
 }
 
 fn default_llm() -> LlmConfig {
@@ -31,25 +58,6 @@ fn default_server() -> ServerConfig {
 
 fn default_ui() -> UiConfig {
     UiConfig::default()
-}
-
-fn default_ui_hubs() -> HashMap<String, UiHubConfig> {
-    let mut hubs = HashMap::new();
-    let default_hub = UiHubConfig {
-        name: "default".to_string(),
-        user_topic: "ui:user".to_string(),
-        input_topic: "ui:input".to_string(),
-        buffer_size: 1000,
-        subscribe_to: vec![
-            "sar:log".to_string(),
-            "sar:echo".to_string(),
-            "sar:reverse".to_string(),
-            "sar:llm:stream".to_string(),
-        ],
-        route_to: vec!["sar:llm-test:0:in".to_string()],
-    };
-    hubs.insert("default".to_string(), default_hub);
-    hubs
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -245,6 +253,29 @@ impl Config {
         let config: Config = toml::from_str(content).map_err(|e| ConfigError::ParseFailed(e))?;
         Ok(config)
     }
+
+    pub fn to_toml(&self) -> Result<String, ConfigError> {
+        let mut root = toml::Value::Table(toml::map::Map::new());
+
+        fn to_toml_value(v: impl serde::Serialize) -> toml::Value {
+            let json = serde_json::to_value(&v).unwrap();
+            toml::Value::try_from(json).unwrap()
+        }
+
+        root.as_table_mut().unwrap().insert("topics".to_string(), to_toml_value(&self.topics));
+        root.as_table_mut().unwrap().insert("server".to_string(), to_toml_value(&self.server));
+        root.as_table_mut().unwrap().insert("ui".to_string(), to_toml_value(&self.ui));
+        root.as_table_mut().unwrap().insert("llm".to_string(), to_toml_value(&self.llm));
+
+        let mut hubs_table = toml::Value::Table(toml::map::Map::new());
+        for (name, hub) in &self.ui_hubs {
+            hubs_table.as_table_mut().unwrap().insert(name.clone(), to_toml_value(hub));
+        }
+        root.as_table_mut().unwrap().insert("ui_hubs".to_string(), hubs_table);
+
+        toml::to_string_pretty(&root)
+            .map_err(|e| ConfigError::SerializeFailed(e.to_string()))
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -253,4 +284,6 @@ pub enum ConfigError {
     ReadFailed(String, std::io::Error),
     #[error("Failed to parse config: {0}")]
     ParseFailed(#[from] toml::de::Error),
+    #[error("Failed to serialize config: {0}")]
+    SerializeFailed(String),
 }
