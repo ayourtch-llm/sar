@@ -7,7 +7,7 @@ use clap::Parser;
 use sar_core::{Config, SarBus};
 use sar_llm::LlmActor;
 use sar_ui_hub::UiHubActor;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::fmt::MakeWriter;
 
@@ -87,7 +87,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     bus.create_topic("ui:input", 100).await;
 
     // Spawn UI hub actors
-    for (name, hub_config) in &config.ui_hubs {
+    let hubs = if config.ui_hubs.is_empty() {
+        warn!("No UI hubs configured, using defaults");
+        let mut hubs = std::collections::HashMap::new();
+        let default_hub = sar_core::config::UiHubConfig {
+            name: "default".to_string(),
+            user_topic: "ui:user".to_string(),
+            input_topic: "ui:input".to_string(),
+            buffer_size: 1000,
+            subscribe_to: vec!["sar:log".to_string()],
+            route_to: vec![],
+        };
+        hubs.insert("default".to_string(), default_hub);
+        hubs
+    } else {
+        config.ui_hubs.clone()
+    };
+
+    for (name, hub_config) in &hubs {
         info!("Spawning UI hub '{}'", name);
         let hub_actor = UiHubActor::new(hub_config.clone());
         (*bus).spawn_actor(hub_actor).await?;
@@ -164,7 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     });
 
     // Spawn TUI actor (this blocks until the user quits)
-    let first_hub = config.ui_hubs.values().next()
+    let first_hub = hubs.values().next()
         .ok_or("No UI hub configured")?;
     let tui_actor = sar_tui::TuiActor::new(
         first_hub.user_topic.clone(),

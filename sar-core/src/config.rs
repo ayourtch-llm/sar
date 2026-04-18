@@ -13,7 +13,7 @@ pub struct Config {
     pub ui: UiConfig,
     #[serde(default = "default_llm")]
     pub llm: LlmConfig,
-    #[serde(default)]
+    #[serde(default = "default_ui_hubs")]
     pub ui_hubs: HashMap<String, UiHubConfig>,
 }
 
@@ -31,6 +31,20 @@ fn default_server() -> ServerConfig {
 
 fn default_ui() -> UiConfig {
     UiConfig::default()
+}
+
+fn default_ui_hubs() -> HashMap<String, UiHubConfig> {
+    let mut hubs = HashMap::new();
+    let default_hub = UiHubConfig {
+        name: "default".to_string(),
+        user_topic: "ui:user".to_string(),
+        input_topic: "ui:input".to_string(),
+        buffer_size: 1000,
+        subscribe_to: vec!["sar:log".to_string()],
+        route_to: vec![],
+    };
+    hubs.insert("default".to_string(), default_hub);
+    hubs
 }
 
 #[derive(Debug, Deserialize, Serialize)]

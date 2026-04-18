@@ -12,10 +12,9 @@ port = 3000
 [ui]
 show_bottom_panel = true
 
-[ui_hub.default]
-name = "default"
-user_topic = "ui:user"
-input_topic = "ui:input"
-buffer_size = 1000
-subscribe_to = ["sar:log", "sar:echo", "sar:reverse", "sar:llm:stream"]
-route_to = ["sar:llm-test:0:in"]
+[llm]
+model = "gpt-4o-mini"
+base_url = "http://ayourtch-desktop:8000/v1"
+api_key = ""
+temperature = 0.699999988079071
+max_tokens = 2048
