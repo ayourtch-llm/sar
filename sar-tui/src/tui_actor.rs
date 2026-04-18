@@ -189,7 +189,7 @@ impl Actor for TuiActor {
 
                 if show_bottom {
                     let bottom_paragraph = Paragraph::new(snapshot.bottom_text)
-                        .block(Block::default())
+                        .block(Block::default().style(Style::default().bg(LIGHT_GRAY)))
                         .scroll((snapshot.bottom_scroll as u16, 0));
                     frame.render_widget(bottom_paragraph, chunks[3]);
 
@@ -460,13 +460,23 @@ struct TuiState {
 
 impl TuiState {
     fn new(show_bottom_panel: bool, input_topic: String) -> Self {
+        let mut bottom_items = Vec::new();
+        if show_bottom_panel {
+            for line in [" Ready ", "", " SAR v0.1.0 ", " Press /quit or Ctrl+C to quit ", ""] {
+                let height = line.matches('\n').count() + 1;
+                bottom_items.push(LogItem {
+                    text: line.to_string(),
+                    height,
+                });
+            }
+        }
         Self {
             log_items: Vec::new(),
             scroll: 0,
             horizontal_scroll: 0,
             at_bottom: true,
             visible_lines: 24,
-            bottom_items: Vec::new(),
+            bottom_items,
             bottom_scroll: 0,
             bottom_at_bottom: true,
             input_lines: vec![String::new()],
