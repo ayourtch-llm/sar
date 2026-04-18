@@ -141,11 +141,8 @@ impl Actor for LlmTestActor {
                 result = stream_rx.recv() => {
                     match result {
                         Ok(msg) => {
-                            let forwarded = Message::new(
-                                &self.stream_output_topic,
-                                &msg.source,
-                                msg.payload.clone(),
-                            );
+                            let mut forwarded = msg.clone();
+                            forwarded.topic = self.stream_output_topic.clone();
                             if let Err(e) = bus.publish(&self.id(), forwarded).await {
                                 error!("Failed to forward stream chunk: {}", e);
                             }

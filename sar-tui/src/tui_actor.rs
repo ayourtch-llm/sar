@@ -104,10 +104,13 @@ impl Actor for TuiActor {
                             None
                         };
                         if is_thinking {
+                            state.streaming_item_id = None;
                             state.add_thinking_chunk(display, stream_id);
                         } else if is_stream {
+                            state.thinking_item_id = None;
                             state.add_stream_chunk(display, stream_id);
                         } else {
+                            state.thinking_item_id = None;
                             let text = if meta_type == "UserInput" {
                                 format!("> {}", display)
                             } else {
@@ -705,8 +708,8 @@ impl TuiState {
                 self.thinking_item_id = Some(new_item_id.clone());
                 self.log_items.push(LogItem {
                     item_id: new_item_id,
-                    text: String::new(),
-                    height: 0,
+                    text: "  [thinking] ".to_string(),
+                    height: 1,
                 });
                 continue;
             }
@@ -719,8 +722,8 @@ impl TuiState {
                         self.thinking_item_id = Some(new_item_id.clone());
                         self.log_items.push(LogItem {
                             item_id: new_item_id,
-                            text: String::new(),
-                            height: 0,
+                            text: "  [thinking] ".to_string(),
+                            height: 1,
                         });
                     }
                 }
