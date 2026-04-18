@@ -111,6 +111,14 @@ impl Actor for TuiActor {
                         } else if is_stream {
                             state.thinking_item_id = None;
                             state.add_stream_chunk(display, stream_id);
+                        } else if meta_type == "LlmToolCall" {
+                            state.thinking_item_id = None;
+                            state.streaming_item_id = None;
+                            state.add_log_entry(format!("  [tool_call] {}", display));
+                        } else if meta_type == "LlmToolResult" {
+                            state.thinking_item_id = None;
+                            state.streaming_item_id = None;
+                            state.add_log_entry(format!("  [tool_result] {}", display));
                         } else {
                             state.thinking_item_id = None;
                             let text = if meta_type == "UserInput" {
@@ -760,6 +768,10 @@ impl TuiState {
                 item.text.split('\n').map(|part| {
                     if part.starts_with("  [thinking] ") {
                         Line::from(part.to_string()).style(Style::default().fg(Color::DarkGray))
+                    } else if part.starts_with("  [tool_call] ") {
+                        Line::from(part.to_string()).style(Style::default().fg(Color::Yellow))
+                    } else if part.starts_with("  [tool_result] ") {
+                        Line::from(part.to_string()).style(Style::default().fg(Color::Green))
                     } else {
                         Line::from(part.to_string())
                     }

@@ -199,6 +199,14 @@ impl LlmActor {
                                     if let Err(e) = bus.publish(&self.id(), tc_msg).await {
                                         error!("Failed to publish tool call chunk: {}", e);
                                     }
+                                    let stream_tc_msg = Message::new(
+                                        &self.stream_topic,
+                                        &self.id(),
+                                        format!("  [tool_call] {}({})", func_name, func_args),
+                                    ).with_type("LlmToolCall").with_stream_id(stream_id.clone());
+                                    if let Err(e) = bus.publish(&self.id(), stream_tc_msg).await {
+                                        error!("Failed to publish tool call stream chunk: {}", e);
+                                    }
                                 }
                             }
                         }

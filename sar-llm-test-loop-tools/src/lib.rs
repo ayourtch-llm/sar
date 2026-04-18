@@ -295,6 +295,14 @@ impl Actor for LlmTestLoopToolsActor {
                                     match tool.execute(&args).await {
                                         Ok(result) => {
                                             info!("LLM test loop tools actor {} tool {} result: {}", self.index, func_name, result);
+                                            let stream_msg = Message::new(
+                                                &self.stream_output_topic,
+                                                &self.id(),
+                                                format!("  [tool_result] {} => {}", func_name, result),
+                                            ).with_type("LlmToolResult");
+                                            if let Err(e) = bus.publish(&self.id(), stream_msg).await {
+                                                error!("Failed to publish tool result stream: {}", e);
+                                            }
                                             tool_results.push(serde_json::json!({
                                                 "tool_call_id": tool_call_id,
                                                 "name": func_name,
@@ -303,6 +311,14 @@ impl Actor for LlmTestLoopToolsActor {
                                         }
                                         Err(e) => {
                                             error!("LLM test loop tools actor {} tool {} error: {}", self.index, func_name, e);
+                                            let stream_msg = Message::new(
+                                                &self.stream_output_topic,
+                                                &self.id(),
+                                                format!("  [tool_error] {} => {}", func_name, e),
+                                            ).with_type("LlmToolResult");
+                                            if let Err(e) = bus.publish(&self.id(), stream_msg).await {
+                                                error!("Failed to publish tool error stream: {}", e);
+                                            }
                                             tool_results.push(serde_json::json!({
                                                 "tool_call_id": tool_call_id,
                                                 "name": func_name,
