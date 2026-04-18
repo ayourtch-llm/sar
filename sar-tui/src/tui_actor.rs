@@ -189,8 +189,7 @@ impl Actor for TuiActor {
 
                 if show_bottom {
                     let bottom_paragraph = Paragraph::new(snapshot.bottom_text)
-                        .block(Block::default().style(Style::default().bg(LIGHT_GRAY)))
-                        .scroll((snapshot.bottom_scroll as u16, 0));
+                        .block(Block::default().style(Style::default().bg(LIGHT_GRAY)));
                     frame.render_widget(bottom_paragraph, chunks[3]);
 
                     let bottom_scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
