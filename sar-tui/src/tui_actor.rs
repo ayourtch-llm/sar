@@ -436,9 +436,10 @@ impl TuiState {
     }
 
     fn add_log_entry(&mut self, entry: String) {
+        let height = entry.matches('\n').count() + 1;
         self.log_items.push(LogItem {
             text: entry,
-            height: 1,
+            height,
         });
         if self.log_items.len() > 1000 {
             self.log_items.drain(..100);
@@ -452,8 +453,7 @@ impl TuiState {
         let lines: Vec<Line<'static>> = self.log_items
             .iter()
             .flat_map(|item| {
-                std::iter::repeat_with(|| Line::from(item.text.clone()))
-                    .take(item.height)
+                item.text.split('\n').map(|part| Line::from(part.to_string())).collect::<Vec<_>>()
             })
             .collect();
         Text::from(lines)
