@@ -2,12 +2,13 @@ use std::process::id as pid;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind};
+use crossterm::terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::Terminal;
 use sar_core::actor::Actor;
 use sar_core::bus::SarBus;
@@ -42,8 +43,12 @@ impl Actor for TuiActor {
     }
 
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        crossterm::terminal::enable_raw_mode()?;
-        crossterm::execute!(std::io::stderr(), crossterm::terminal::EnterAlternateScreen)?;
+        terminal::enable_raw_mode()?;
+        crossterm::execute!(
+            std::io::stderr(),
+            terminal::EnterAlternateScreen,
+            EnableMouseCapture
+        )?;
 
         let backend = CrosstermBackend::new(std::io::stderr());
         let mut terminal = Terminal::new(backend)?;
@@ -100,6 +105,13 @@ impl Actor for TuiActor {
                     .scroll((snapshot.scroll, 0));
                 frame.render_widget(log_paragraph, chunks[0]);
 
+                let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(Some("↑"))
+                    .end_symbol(Some("↓"));
+                let mut scrollbar_state = ScrollbarState::new(snapshot.total_lines)
+                    .position(snapshot.scroll as usize);
+                frame.render_stateful_widget(scrollbar, chunks[0], &mut scrollbar_state);
+
                 let status_paragraph = Paragraph::new(snapshot.status_text)
                     .block(Block::default().style(Style::default().bg(Color::Black)))
                     .style(Style::default().fg(Color::Green));
@@ -134,78 +146,119 @@ impl Actor for TuiActor {
             })?;
 
             if crossterm::event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    let mut state = state.lock().await;
-                    match key.code {
-                        KeyCode::Char(c) => {
-                            if key.modifiers == KeyModifiers::NONE {
-                                let line_idx = state.active_line;
-                                state.input_lines[line_idx].push(c);
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            let line_idx = state.active_line;
-                            let line = &mut state.input_lines[line_idx];
-                            line.pop();
-                        }
-                        KeyCode::Enter => {
-                            if key.modifiers == KeyModifiers::CONTROL {
-                                let line_idx = state.active_line;
-                                state.input_lines.insert(line_idx + 1, String::new());
-                                state.active_line += 1;
-                            } else {
-                                let input = state.input_lines.join("\n");
-                                if input.trim() == "/quit" {
-                                    break;
+                let event = event::read()?;
+                let mut state = state.lock().await;
+                
+                match &event {
+                    Event::Key(key) => {
+                        match key.code {
+                            KeyCode::Char(c) => {
+                                if key.modifiers == KeyModifiers::NONE {
+                                    let line_idx = state.active_line;
+                                    state.input_lines[line_idx].push(c);
                                 }
-                                if input.starts_with("/target ") {
-                                    let new_target = input.trim().trim_start_matches("/target ").trim().to_string();
-                                    if !new_target.is_empty() {
-                                        state.current_target = new_target.clone();
-                                        let info_msg = Message::text(
-                                            &state.current_target.clone(),
-                                            "system",
-                                            format!("Target changed to: {}", new_target),
+                            }
+                            KeyCode::Backspace => {
+                                let line_idx = state.active_line;
+                                let line = &mut state.input_lines[line_idx];
+                                line.pop();
+                            }
+                            KeyCode::Enter => {
+                                if key.modifiers == KeyModifiers::CONTROL {
+                                    let line_idx = state.active_line;
+                                    state.input_lines.insert(line_idx + 1, String::new());
+                                    state.active_line += 1;
+                                } else {
+                                    let input = state.input_lines.join("\n");
+                                    if input.trim() == "/quit" {
+                                        drop(state);
+                                        break;
+                                    }
+                                    if input.starts_with("/target ") {
+                                        let new_target = input.trim().trim_start_matches("/target ").trim().to_string();
+                                        if !new_target.is_empty() {
+                                            state.current_target = new_target.clone();
+                                            let info_msg = Message::text(
+                                                &state.current_target.clone(),
+                                                "system",
+                                                format!("Target changed to: {}", new_target),
+                                            );
+                                            if let Err(e) = bus.publish(info_msg).await {
+                                                error!("Failed to publish target change: {}", e);
+                                            }
+                                        }
+                                        state.input_lines.clear();
+                                        state.input_lines.push(String::new());
+                                        state.active_line = 0;
+                                        continue;
+                                    }
+                                    if !input.is_empty() {
+                                        let msg = Message::text(
+                                            &state.current_target,
+                                            APP_ID,
+                                            input.clone(),
                                         );
-                                        if let Err(e) = bus.publish(info_msg).await {
-                                            error!("Failed to publish target change: {}", e);
+                                        if let Err(e) = bus.publish(msg).await {
+                                            error!("Failed to publish input: {}", e);
                                         }
                                     }
                                     state.input_lines.clear();
                                     state.input_lines.push(String::new());
                                     state.active_line = 0;
-                                    continue;
                                 }
-                                if !input.is_empty() {
-                                    let msg = Message::text(
-                                        &state.current_target,
-                                        APP_ID,
-                                        input.clone(),
-                                    );
-                                    if let Err(e) = bus.publish(msg).await {
-                                        error!("Failed to publish input: {}", e);
-                                    }
+                            }
+                            KeyCode::Up => {
+                                if state.active_line > 0 {
+                                    state.active_line -= 1;
                                 }
-                                state.input_lines.clear();
-                                state.input_lines.push(String::new());
-                                state.active_line = 0;
                             }
-                        }
-                        KeyCode::Up => {
-                            if state.active_line > 0 {
-                                state.active_line -= 1;
+                            KeyCode::Down => {
+                                if state.active_line < state.input_lines.len() - 1 {
+                                    state.active_line += 1;
+                                }
                             }
-                        }
-                        KeyCode::Down => {
-                            if state.active_line < state.input_lines.len() - 1 {
-                                state.active_line += 1;
+                            KeyCode::Esc => {
+                                state.focus_input = !state.focus_input;
                             }
+                            KeyCode::PageUp => {
+                                let scroll_amount = if state.scroll >= 10 { 10 } else { state.scroll };
+                                state.scroll -= scroll_amount;
+                            }
+                            KeyCode::PageDown => {
+                                let max_scroll = state.log_entries.len().saturating_sub(100);
+                                let scroll_amount = if max_scroll - state.scroll >= 10 { 10 } else { max_scroll.saturating_sub(state.scroll) };
+                                state.scroll += scroll_amount;
+                            }
+                            KeyCode::Home => {
+                                state.scroll = 0;
+                            }
+                            KeyCode::End => {
+                                state.scroll = state.log_entries.len().saturating_sub(100);
+                            }
+                            _ => {}
                         }
-                        KeyCode::Esc => {
-                            state.focus_input = !state.focus_input;
-                        }
-                        _ => {}
                     }
+                    Event::Mouse(mouse) => {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => {
+                                if state.scroll >= 10 {
+                                    state.scroll -= 10;
+                                } else {
+                                    state.scroll = 0;
+                                }
+                            }
+                            MouseEventKind::ScrollDown => {
+                                let max_scroll = state.log_entries.len().saturating_sub(100);
+                                if state.scroll + 10 <= max_scroll {
+                                    state.scroll += 10;
+                                } else {
+                                    state.scroll = max_scroll;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -224,6 +277,7 @@ struct RenderSnapshot {
     show_bottom_panel: bool,
     log_text: Text<'static>,
     scroll: u16,
+    total_lines: usize,
     input_line: String,
     status_text: Line<'static>,
 }
@@ -249,6 +303,7 @@ impl RenderSnapshot {
             show_bottom_panel: state.show_bottom_panel,
             log_text: state.render_log(),
             scroll: state.scroll as u16,
+            total_lines: state.log_entries.len(),
             input_line: state.input_lines[state.active_line].clone(),
             status_text,
         }
