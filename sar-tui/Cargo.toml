@@ -9,7 +9,7 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "sar-tui"
-path = "src/tui_actor.rs"
+path = "src/main.rs"
 
 [dependencies]
 sar-core = { path = "../sar-core" }
