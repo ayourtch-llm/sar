@@ -1,0 +1,11 @@
+[package]
+name = "sar-tracing"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sar-core = { path = "../sar-core" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }

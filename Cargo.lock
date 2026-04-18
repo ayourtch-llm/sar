@@ -761,6 +761,7 @@ dependencies = [
  "sar-core",
  "sar-echo",
  "sar-server",
+ "sar-tracing",
  "sar-tui",
  "serde",
  "serde_json",
@@ -810,6 +811,17 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "sar-tracing"
+version = "0.1.0"
+dependencies = [
+ "sar-core",
+ "serde_json",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]
