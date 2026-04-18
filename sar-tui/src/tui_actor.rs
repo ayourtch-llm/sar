@@ -216,7 +216,7 @@ impl Actor for TuiActor {
                                         if !new_target.is_empty() {
                                             state.current_target = new_target.clone();
                                             let info_msg = Message::text(
-                                                &state.current_target.clone(),
+                                                &self.log_topic,
                                                 "system",
                                                 format!("Target changed to: {}", new_target),
                                             );
