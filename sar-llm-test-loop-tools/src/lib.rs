@@ -27,6 +27,7 @@ pub struct LlmTestLoopToolsActor {
     pub llm_in_topic: String,
     pub llm_out_topic: String,
     pub llm_stream_topic: String,
+    pub llm_tool_calls_topic: String,
     pub stream_output_topic: String,
     pub llm_base_url: String,
     pub tools: Vec<Box<dyn Tool>>,
@@ -39,6 +40,7 @@ impl LlmTestLoopToolsActor {
         llm_in_topic: String,
         llm_out_topic: String,
         llm_stream_topic: String,
+        llm_tool_calls_topic: String,
         stream_output_topic: String,
     ) -> Self {
         Self {
@@ -47,6 +49,7 @@ impl LlmTestLoopToolsActor {
             llm_in_topic,
             llm_out_topic,
             llm_stream_topic,
+            llm_tool_calls_topic,
             stream_output_topic,
             llm_base_url: String::new(),
             tools: Vec::new(),
@@ -61,6 +64,51 @@ impl LlmTestLoopToolsActor {
     pub fn with_tool(mut self, tool: impl Tool + 'static) -> Self {
         self.tools.push(Box::new(tool));
         self
+    }
+
+    async fn find_tool(&self, name: &str) -> Option<&dyn Tool> {
+        self.tools.iter().find(|t| t.name() == name).map(|t| t.as_ref())
+    }
+
+    async fn send_conversation(
+        &self,
+        bus: &SarBus,
+        conversation_history: &[String],
+        tool_defs: &[serde_json::Value],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let conversation_text = conversation_history.join("\n");
+
+        let llm_request = LlmRequest {
+            prompt: conversation_text,
+            config: if self.llm_base_url.is_empty() {
+                None
+            } else {
+                Some(LlmConfig {
+                    model: String::new(),
+                    base_url: self.llm_base_url.clone(),
+                    api_key: String::new(),
+                    temperature: 0.7,
+                    max_tokens: 65536,
+                })
+            },
+            tools: if tool_defs.is_empty() {
+                None
+            } else {
+                Some(tool_defs.to_vec())
+            },
+        };
+
+        let msg = Message::new(
+            &self.llm_in_topic,
+            &self.id(),
+            serde_json::to_value(&llm_request)
+                .map_err(|e| format!("Failed to serialize LLM request: {}", e))?,
+        );
+
+        if let Err(e) = bus.publish(&self.id(), msg).await {
+            error!("Failed to publish to LLM input: {}", e);
+        }
+        Ok(())
     }
 }
 
@@ -83,6 +131,10 @@ impl Actor for LlmTestLoopToolsActor {
 
         let mut stream_rx = bus.subscribe(&self.id(), &self.llm_stream_topic).await.map_err(|e| {
             format!("Failed to subscribe to stream topic '{}': {}", self.llm_stream_topic, e)
+        })?;
+
+        let mut tool_calls_rx = bus.subscribe(&self.id(), &self.llm_tool_calls_topic).await.map_err(|e| {
+            format!("Failed to subscribe to tool calls topic '{}': {}", self.llm_tool_calls_topic, e)
         })?;
 
         let tool_defs: Vec<serde_json::Value> = self
@@ -129,40 +181,8 @@ impl Actor for LlmTestLoopToolsActor {
                                 self.index, history_len
                             );
 
-                            let conversation_text = {
-                                let history = conversation_history.lock().await;
-                                history.join("\n")
-                            };
-
-                            let llm_request = LlmRequest {
-                                prompt: conversation_text,
-                                config: if self.llm_base_url.is_empty() {
-                                    None
-                                } else {
-                                    Some(LlmConfig {
-                                        model: String::new(),
-                                        base_url: self.llm_base_url.clone(),
-                                        api_key: String::new(),
-                                        temperature: 0.7,
-                                        max_tokens: 65536,
-                                    })
-                                },
-                                tools: if tool_defs.is_empty() {
-                                    None
-                                } else {
-                                    Some(tool_defs.clone())
-                                },
-                            };
-
-                            let msg = Message::new(
-                                &self.llm_in_topic,
-                                &self.id(),
-                                serde_json::to_value(&llm_request)
-                                    .map_err(|e| format!("Failed to serialize LLM request: {}", e))?,
-                            );
-
-                            if let Err(e) = bus.publish(&self.id(), msg).await {
-                                error!("Failed to publish to LLM input: {}", e);
+                            if let Err(e) = self.send_conversation(bus, &conversation_history.lock().await, &tool_defs).await {
+                                error!("Failed to send conversation: {}", e);
                             }
                         }
                         Err(RecvError::Lagged(n)) => {
@@ -216,20 +236,6 @@ impl Actor for LlmTestLoopToolsActor {
                             if let Err(e) = bus.publish(&self.id(), forwarded).await {
                                 error!("Failed to forward stream chunk: {}", e);
                             }
-                            if let serde_json::Value::String(ref s) = msg.payload {
-                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(s) {
-                                    if let Some(type_val) = json.get("type").and_then(|t| t.as_str()) {
-                                        if type_val == "stream_end" {
-                                        }
-                                    }
-                                }
-                            }
-                            if let serde_json::Value::Object(ref map) = msg.payload {
-                                if let Some(type_val) = map.get("type").and_then(|t| t.as_str()) {
-                                    if type_val == "stream_end" {
-                                    }
-                                }
-                            }
                         }
                         Err(RecvError::Lagged(n)) => {
                             warn!(
@@ -239,6 +245,93 @@ impl Actor for LlmTestLoopToolsActor {
                         }
                         Err(RecvError::Closed) => {
                             info!("LLM test loop tools actor {} stream topic closed", self.index);
+                        }
+                    }
+                }
+                result = tool_calls_rx.recv() => {
+                    match result {
+                        Ok(msg) => {
+                            info!("LLM test loop tools actor {} received tool calls from '{}'", self.index, msg.source);
+                            
+                            let tool_calls: Vec<serde_json::Value> = match serde_json::from_value(msg.payload.clone()) {
+                                Ok(tc) => tc,
+                                Err(e) => {
+                                    error!("Failed to parse tool calls: {}", e);
+                                    continue;
+                                }
+                            };
+
+                            let mut tool_results = Vec::new();
+                            for tc in &tool_calls {
+                                let func_name = tc["function"]["name"].as_str().unwrap_or("");
+                                let func_args_str = tc["function"]["arguments"].as_str().unwrap_or("");
+                                
+                                info!("LLM test loop tools actor {} executing tool call: {}({})", self.index, func_name, func_args_str);
+
+                                if let Some(tool) = self.find_tool(func_name).await {
+                                    let args: serde_json::Value = match serde_json::from_str(func_args_str) {
+                                        Ok(a) => a,
+                                        Err(e) => {
+                                            error!("Failed to parse tool arguments for {}: {}", func_name, e);
+                                            tool_results.push(serde_json::json!({
+                                                "tool_call_id": tc["id"],
+                                                "name": func_name,
+                                                "content": format!("Error parsing arguments: {}", e),
+                                            }));
+                                            continue;
+                                        }
+                                    };
+
+                                    match tool.execute(&args).await {
+                                        Ok(result) => {
+                                            info!("LLM test loop tools actor {} tool {} result: {}", self.index, func_name, result);
+                                            tool_results.push(serde_json::json!({
+                                                "tool_call_id": tc["id"],
+                                                "name": func_name,
+                                                "content": result,
+                                            }));
+                                        }
+                                        Err(e) => {
+                                            error!("LLM test loop tools actor {} tool {} error: {}", self.index, func_name, e);
+                                            tool_results.push(serde_json::json!({
+                                                "tool_call_id": tc["id"],
+                                                "name": func_name,
+                                                "content": format!("Error: {}", e),
+                                            }));
+                                        }
+                                    }
+                                } else {
+                                    warn!("LLM test loop tools actor {} tool '{}' not found", self.index, func_name);
+                                    tool_results.push(serde_json::json!({
+                                        "tool_call_id": tc["id"],
+                                        "name": func_name,
+                                        "content": format!("Error: tool '{}' not found", func_name),
+                                    }));
+                                }
+                            }
+
+                            for tr in &tool_results {
+                                let content = tr["content"].as_str().unwrap_or("");
+                                {
+                                    let mut history = conversation_history.lock().await;
+                                    history.push(format!("ToolResult: tool={}, result={}", tr["name"], content));
+                                }
+                            }
+
+                            info!("LLM test loop tools actor {} sending tool results back to LLM, conversation size: {}", self.index, conversation_history.lock().await.len());
+                            
+                            if let Err(e) = self.send_conversation(bus, &conversation_history.lock().await, &tool_defs).await {
+                                error!("Failed to send tool results to LLM: {}", e);
+                            }
+                        }
+                        Err(RecvError::Lagged(n)) => {
+                            warn!(
+                                "LLM test loop tools actor {} lagged behind on tool calls, dropped {} messages",
+                                self.index, n
+                            );
+                        }
+                        Err(RecvError::Closed) => {
+                            info!("LLM test loop tools actor {} tool calls topic closed", self.index);
                         }
                     }
                 }

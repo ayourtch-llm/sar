@@ -29,17 +29,19 @@ pub struct LlmActor {
     pub output_topic: String,
     pub stream_topic: String,
     pub stats_topic: String,
+    pub tool_calls_topic: String,
     pub config: LlmConfig,
 }
 
 impl LlmActor {
-    pub fn new(index: usize, input_topic: String, output_topic: String, stream_topic: String, stats_topic: String, config: LlmConfig) -> Self {
+    pub fn new(index: usize, input_topic: String, output_topic: String, stream_topic: String, stats_topic: String, tool_calls_topic: String, config: LlmConfig) -> Self {
         Self {
             index,
             input_topic,
             output_topic,
             stream_topic,
             stats_topic,
+            tool_calls_topic,
             config,
         }
     }
@@ -57,7 +59,7 @@ impl LlmActor {
         }
     }
 
-    async fn send_request(&self, config: &LlmConfig, messages: &[serde_json::Value], tools: Option<&[serde_json::Value]>, bus: &SarBus) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    async fn send_request(&self, config: &LlmConfig, messages: &[serde_json::Value], tools: Option<&[serde_json::Value]>, bus: &SarBus) -> Result<(String, Vec<serde_json::Value>), Box<dyn std::error::Error + Send + Sync>> {
         let stream_id = uuid::Uuid::new_v4().to_string();
         let client = reqwest::Client::new();
         
@@ -89,6 +91,8 @@ impl LlmActor {
         let mut full_response = String::new();
         let mut stream = response.bytes_stream();
         let mut rxtokens: usize = 0;
+        let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+        let mut tool_call_accumulators: std::collections::HashMap<usize, (String, String)> = std::collections::HashMap::new();
 
         while let Some(chunk) = stream.next().await {
             let chunk = match chunk {
@@ -165,6 +169,36 @@ impl LlmActor {
                                 }
                             }
                         }
+                        if let Some(tool_calls_arr) = json["choices"][0]["delta"]["tool_calls"].as_array() {
+                            for tool_call in tool_calls_arr {
+                                if let Some(index) = tool_call["index"].as_u64() {
+                                    let idx = index as usize;
+                                    let name = tool_call["function"]["name"].as_str().unwrap_or("");
+                                    let args = tool_call["function"]["arguments"].as_str().unwrap_or("");
+                                    if !name.is_empty() {
+                                        tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new())).0.push_str(name);
+                                    }
+                                    if !args.is_empty() {
+                                        tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new())).1.push_str(args);
+                                    }
+                                    let (func_name, func_args) = tool_call_accumulators.get(&idx).unwrap();
+                                    let tc_msg = Message::new(
+                                        &self.tool_calls_topic,
+                                        &self.id(),
+                                        serde_json::json!({
+                                            "index": idx,
+                                            "function": {
+                                                "name": func_name,
+                                                "arguments": func_args,
+                                            }
+                                        }),
+                                    ).with_type("LlmToolCall").with_stream_id(stream_id.clone());
+                                    if let Err(e) = bus.publish(&self.id(), tc_msg).await {
+                                        error!("Failed to publish tool call chunk: {}", e);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -184,14 +218,27 @@ impl LlmActor {
             &self.stats_topic,
             &self.id(),
             serde_json::to_value(&StreamStats { rxtokens }).unwrap(),
-        ).with_type("StreamStats").with_stream_id(stream_id);
+        ).with_type("StreamStats").with_stream_id(stream_id.clone());
         if let Err(e) = bus.publish(&self.id(), stats_msg).await {
             error!("Failed to publish stream stats: {}", e);
         } else {
             info!("LLM actor {} published stats to '{}'", self.index, self.stats_topic);
         }
 
-        Ok(full_response)
+        for (idx, (func_name, func_args)) in &tool_call_accumulators {
+            let full_tc = serde_json::json!({
+                "id": format!("call_{}", stream_id).replace('-', "_"),
+                "type": "function",
+                "function": {
+                    "name": func_name,
+                    "arguments": func_args,
+                }
+            });
+            info!("LLM actor {} accumulated tool call {}: {}", self.index, idx, func_name);
+            tool_calls.push(full_tc);
+        }
+
+        Ok((full_response, tool_calls))
     }
 }
 
@@ -223,15 +270,26 @@ impl Actor for LlmActor {
 
                     let config = self.merge_config(request.config);
                     
-                    let mut messages_vec = vec![
+                    let messages_vec = vec![
                         serde_json::json!({"role": "user", "content": request.prompt})
                     ];
                     let tools = request.tools.as_deref();
                     let result = self.send_request(&config, &messages_vec, tools, bus).await;
                     
                     match result {
-                        Ok(full_response) => {
-                            info!("LLM actor {} completed request", self.index);
+                        Ok((full_response, tool_calls)) => {
+                            info!("LLM actor {} completed request, tool_calls count: {}", self.index, tool_calls.len());
+                            
+                            if !tool_calls.is_empty() {
+                                let tc_msg = Message::new(
+                                    &self.tool_calls_topic,
+                                    &self.id(),
+                                    serde_json::to_value(&tool_calls).unwrap(),
+                                ).with_type("LlmToolCalls");
+                                if let Err(e) = bus.publish(&self.id(), tc_msg).await {
+                                    error!("Failed to publish tool calls: {}", e);
+                                }
+                            }
                             
                             let out_msg = Message::new(
                                 &self.output_topic,
