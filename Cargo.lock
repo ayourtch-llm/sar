@@ -1520,6 +1520,7 @@ dependencies = [
  "async-trait",
  "sar-core",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]

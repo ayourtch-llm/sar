@@ -170,7 +170,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         first_hub.user_topic.clone(),
         first_hub.input_topic.clone(),
         config.topics.log.clone(),
-        "llm:0:stream".to_string(),
         config.ui.show_bottom_panel,
     );
     (*bus).spawn_actor(tui_actor).await?.wait().await?;
