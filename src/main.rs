@@ -57,11 +57,17 @@ struct Cli {
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
 
-    // Load config
+    // Load or create config
     let config = if cli.config.exists() {
         Config::from_file(&cli.config)?
     } else {
-        Config::default()
+        let default_config = Config::default();
+        let toml_str = toml::to_string_pretty(&default_config)
+            .map_err(|e| format!("Failed to serialize default config: {}", e))?;
+        std::fs::write(&cli.config, &toml_str)
+            .map_err(|e| format!("Failed to write default config to '{}': {}", cli.config.display(), e))?;
+        info!("Created default config at: {}", cli.config.display());
+        default_config
     };
 
     // Create pub-sub bus

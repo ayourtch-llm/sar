@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Serialize)]
 pub struct Config {
     #[serde(default = "default_topics")]
     pub topics: TopicsConfig,
@@ -33,7 +33,7 @@ fn default_ui() -> UiConfig {
     UiConfig::default()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TopicsConfig {
     #[serde(default = "default_log_topic")]
     pub log: String,
@@ -59,7 +59,7 @@ impl Default for TopicsConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ServerConfig {
     #[serde(default = "default_host")]
     pub host: String,
@@ -76,7 +76,7 @@ impl Default for ServerConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UiConfig {
     #[serde(default = "default_true")]
     pub show_bottom_panel: bool,
@@ -116,7 +116,7 @@ impl Default for LlmConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UiHubConfig {
     #[serde(default = "default_ui_hub_name")]
     pub name: String,
