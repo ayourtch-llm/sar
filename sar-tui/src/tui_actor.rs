@@ -93,18 +93,30 @@ impl Actor for TuiActor {
         });
 
         loop {
-            let log_height = {
+            let show_bottom = {
                 let s = state.lock().await;
-                s.visible_lines
+                s.show_bottom_panel
             };
+
+            let terminal_size = terminal.size()?;
+            let log_height = {
+                let area = Rect::new(0, 0, terminal_size.width, terminal_size.height);
+                let chunks = layout_chunks(area, show_bottom);
+                chunks[0].height as usize
+            };
+
+            {
+                let mut s = state.lock().await;
+                s.visible_lines = log_height;
+            }
 
             let snapshot = {
                 let s = state.lock().await;
-                RenderSnapshot::new(&s, log_height)
+                RenderSnapshot::new(&s, s.visible_lines)
             };
 
             terminal.draw(|frame| {
-                let chunks = layout_chunks(frame.area(), false);
+                let chunks = layout_chunks(frame.area(), show_bottom);
 
                 let log_paragraph = Paragraph::new(snapshot.log_text)
                     .block(Block::default());
@@ -135,6 +147,19 @@ impl Actor for TuiActor {
                     chunks[2].x + 2 + snapshot.input_line.len() as u16,
                     chunks[2].y,
                 ));
+
+                if show_bottom {
+                    let info_text = Text::from(vec![
+                        Line::from(" Ready "),
+                        Line::from(""),
+                        Line::from(" SAR v0.1.0 "),
+                        Line::from(" Press /quit or Ctrl+C to quit "),
+                        Line::from(""),
+                    ]);
+                    let info_paragraph = Paragraph::new(info_text)
+                        .block(Block::default().style(Style::default().bg(LIGHT_GRAY)));
+                    frame.render_widget(info_paragraph, chunks[3]);
+                }
             })?;
 
             if crossterm::event::poll(Duration::from_millis(100))? {
@@ -389,10 +414,8 @@ impl TuiState {
         self.log_entries.push(entry);
         if self.log_entries.len() > 1000 {
             self.log_entries.drain(..100);
-            if self.at_bottom {
-                self.scroll = self.max_scroll(self.visible_lines);
-            }
-        } else if self.at_bottom {
+        }
+        if self.at_bottom {
             self.scroll = self.max_scroll(self.visible_lines);
         }
     }
