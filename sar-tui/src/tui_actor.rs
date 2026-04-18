@@ -114,6 +114,10 @@ impl Actor for TuiActor {
                 let input_paragraph = Paragraph::new(input_text)
                     .block(Block::default());
                 frame.render_widget(input_paragraph, chunks[2]);
+                frame.set_cursor_position((
+                    chunks[2].x + 1 + snapshot.input_line.len() as u16,
+                    chunks[2].y + 1,
+                ));
 
                 if snapshot.show_bottom_panel {
                     let info_text = Text::from(vec![
