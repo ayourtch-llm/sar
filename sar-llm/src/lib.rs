@@ -15,11 +15,6 @@ pub struct LlmRequest {
     pub config: Option<LlmConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamEnd {
-    pub r#type: String,
-}
-
 #[derive(Debug, Default)]
 pub struct LlmActor {
     pub index: usize,
@@ -54,6 +49,7 @@ impl LlmActor {
     }
 
     async fn send_request(&self, config: &LlmConfig, prompt: &str, bus: &SarBus) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let stream_id = uuid::Uuid::new_v4().to_string();
         let client = reqwest::Client::new();
         
         let body = serde_json::json!({
@@ -105,7 +101,7 @@ impl LlmActor {
                                     &self.stream_topic,
                                     &self.id(),
                                     content.to_string(),
-                                ).with_type(sar_core::message::LogItemType::LlmStream);
+                                ).with_type("LlmStream").with_stream_id(stream_id.clone());
                                 if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
                                     error!("Failed to publish stream chunk: {}", e);
                                 }
@@ -120,8 +116,8 @@ impl LlmActor {
         let end_msg = Message::new(
             &self.stream_topic,
             &self.id(),
-            serde_json::to_string(&StreamEnd { r#type: "stream_end".to_string() }).unwrap(),
-        );
+            serde_json::json!({"type": "stream_end"}),
+        ).with_type("LlmStreamEnd").with_stream_id(stream_id);
         if let Err(e) = bus.publish(&self.id(), end_msg).await {
             error!("Failed to publish stream end: {}", e);
         }

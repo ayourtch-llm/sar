@@ -16,6 +16,27 @@ impl UiHubActor {
     }
 }
 
+fn classify_message(topic: &str, payload: &serde_json::Value) -> &'static str {
+    if topic.ends_with(":stream") {
+        if let serde_json::Value::String(s) = payload {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(s) {
+                if let Some(type_val) = json.get("type").and_then(|t| t.as_str()) {
+                    if type_val == "stream_end" {
+                        return "LlmStreamEnd";
+                    }
+                }
+            }
+        }
+        return "LlmStream";
+    }
+    match topic {
+        t if t.contains("echo") => "Echo",
+        t if t.contains("reverse") => "Reverse",
+        t if t.contains("log") => "Log",
+        _ => "Info",
+    }
+}
+
 #[async_trait::async_trait]
 impl Actor for UiHubActor {
     fn id(&self) -> sar_core::ActorId {
@@ -62,6 +83,8 @@ impl Actor for UiHubActor {
                             }
                             let mut forwarded = msg.clone();
                             forwarded.topic = user_topic.clone();
+                            let msg_type = classify_message(&topic_clone, &msg.payload);
+                            forwarded.meta = serde_json::json!({"type": msg_type});
                             if let Err(e) = bus.publish(&hub_id, forwarded).await {
                                 error!("UI hub '{}' failed to publish to user topic: {}", hub_name, e);
                             }
@@ -95,12 +118,7 @@ impl Actor for UiHubActor {
                         &self.config.user_topic,
                         &msg.source,
                         msg.payload.clone(),
-                    );
-                    let mut meta = serde_json::Map::new();
-                    meta.insert("type".to_string(), serde_json::Value::String("UserInput".to_string()));
-                    let meta_value = serde_json::Value::Object(meta);
-                    let mut user_msg = user_msg;
-                    user_msg.meta = meta_value;
+                    ).with_type("UserInput");
                     if let Err(e) = bus.publish(&hub_id, user_msg).await {
                         error!("UI hub '{}' failed to publish user input to user topic: {}", self.config.name, e);
                     }

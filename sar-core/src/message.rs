@@ -2,6 +2,35 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum UiMessageType {
+    UserInput,
+    LlmStream,
+    LlmStreamEnd,
+    Echo,
+    Reverse,
+    Log,
+    Info,
+    Error,
+    Warning,
+}
+
+impl fmt::Display for UiMessageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UiMessageType::UserInput => write!(f, "UserInput"),
+            UiMessageType::LlmStream => write!(f, "LlmStream"),
+            UiMessageType::LlmStreamEnd => write!(f, "LlmStreamEnd"),
+            UiMessageType::Echo => write!(f, "Echo"),
+            UiMessageType::Reverse => write!(f, "Reverse"),
+            UiMessageType::Log => write!(f, "Log"),
+            UiMessageType::Info => write!(f, "Info"),
+            UiMessageType::Error => write!(f, "Error"),
+            UiMessageType::Warning => write!(f, "Warning"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum LogItemType {
     UserInput,
     System,
@@ -68,8 +97,17 @@ impl Message {
         Self::new(topic, source, text.into())
     }
 
-    pub fn with_type(mut self, item_type: LogItemType) -> Self {
-        self.meta = serde_json::json!({"type": format!("{:?}", item_type)});
+    pub fn with_type(mut self, item_type: impl Into<String>) -> Self {
+        self.meta = serde_json::json!({"type": item_type.into()});
+        self
+    }
+
+    pub fn with_stream_id(mut self, stream_id: String) -> Self {
+        if let serde_json::Value::Object(ref mut obj) = self.meta {
+            obj.insert("stream_id".to_string(), serde_json::Value::String(stream_id));
+        } else {
+            self.meta = serde_json::json!({"stream_id": stream_id});
+        }
         self
     }
 }

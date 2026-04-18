@@ -76,29 +76,23 @@ impl Actor for TuiActor {
             loop {
                 match rx.recv().await {
                     Ok(msg) => {
-                        if let serde_json::Value::String(ref s) = msg.payload {
-                            if let Ok(stream_end) = serde_json::from_str::<serde_json::Value>(s) {
-                                if let Some(type_val) = stream_end.get("type").and_then(|t| t.as_str()) {
-                                    if type_val == "stream_end" {
-                                        let mut state = state_clone.lock().await;
-                                        state.finalize_stream();
-                                        continue;
-                                    }
-                                }
-                            }
+                        let meta_type = msg.meta.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        if meta_type == "LlmStreamEnd" {
+                            let mut state = state_clone.lock().await;
+                            state.finalize_stream();
+                            continue;
                         }
                         let display = match &msg.payload {
                             serde_json::Value::String(s) => s.clone(),
                             _ => msg.payload.to_string(),
                         };
-                        let meta_type = msg.meta.get("type").and_then(|t| t.as_str()).unwrap_or("");
                         let text = if meta_type == "UserInput" {
                             format!("> {}", display)
                         } else {
                             format!("[{}] {}", msg.source, display)
                         };
                         let mut state = state_clone.lock().await;
-                        let is_stream = msg.meta.get("type").and_then(|t| t.as_str()) == Some("LlmStream");
+                        let is_stream = meta_type == "LlmStream";
                         if is_stream {
                             state.add_stream_chunk(text);
                         } else {
