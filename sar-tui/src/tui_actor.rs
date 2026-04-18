@@ -172,10 +172,10 @@ impl Actor for TuiActor {
                         let key_str = format!("{:?} {:?}", key.modifiers, key.code);
                         state.last_key = key_str;
                         match key.code {
-                            KeyCode::Left if key.modifiers == KeyModifiers::CONTROL => {
+                            KeyCode::Left if key.modifiers == KeyModifiers::SHIFT => {
                                 state.horizontal_scroll = state.horizontal_scroll.saturating_sub(10);
                             }
-                            KeyCode::Right if key.modifiers == KeyModifiers::CONTROL => {
+                            KeyCode::Right if key.modifiers == KeyModifiers::SHIFT => {
                                 state.horizontal_scroll += 10;
                             }
                             KeyCode::Char('[') if key.modifiers == KeyModifiers::CONTROL => {
