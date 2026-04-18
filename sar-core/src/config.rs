@@ -29,7 +29,7 @@ impl Default for Config {
                 "sar:log".to_string(),
                 "sar:echo".to_string(),
                 "sar:reverse".to_string(),
-                "sar:llm:stream".to_string(),
+                "llm-test:0:stream".to_string(),
             ],
             route_to: vec!["sar:llm-test:0:in".to_string()],
         };

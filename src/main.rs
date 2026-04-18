@@ -83,6 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     bus.create_topic("llm:0:out", 1000).await;
     bus.create_topic("llm:0:stream", 1000).await;
     bus.create_topic("llm-test:0:in", 100).await;
+    bus.create_topic("llm-test:0:stream", 1000).await;
     bus.create_topic("ui:user", 1000).await;
     bus.create_topic("ui:input", 100).await;
 
@@ -150,6 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "llm:0:in".to_string(),
         "llm:0:out".to_string(),
         "llm:0:stream".to_string(),
+        "llm-test:0:stream".to_string(),
     );
     (*bus).spawn_actor(llm_test_actor).await?;
 

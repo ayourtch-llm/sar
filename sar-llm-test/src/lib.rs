@@ -14,17 +14,19 @@ pub struct LlmTestActor {
     pub llm_in_topic: String,
     pub llm_out_topic: String,
     pub llm_stream_topic: String,
+    pub stream_output_topic: String,
     pub llm_base_url: String,
 }
 
 impl LlmTestActor {
-    pub fn new(index: usize, input_topic: String, llm_in_topic: String, llm_out_topic: String, llm_stream_topic: String) -> Self {
+    pub fn new(index: usize, input_topic: String, llm_in_topic: String, llm_out_topic: String, llm_stream_topic: String, stream_output_topic: String) -> Self {
         Self {
             index,
             input_topic,
             llm_in_topic,
             llm_out_topic,
             llm_stream_topic,
+            stream_output_topic,
             llm_base_url: String::new(),
         }
     }
@@ -139,9 +141,17 @@ impl Actor for LlmTestActor {
                 result = stream_rx.recv() => {
                     match result {
                         Ok(msg) => {
+                            let forwarded = Message::new(
+                                &self.stream_output_topic,
+                                &msg.source,
+                                msg.payload.clone(),
+                            );
+                            if let Err(e) = bus.publish(&self.id(), forwarded).await {
+                                error!("Failed to forward stream chunk: {}", e);
+                            }
                             info!(
-                                "LLM test actor {} received stream chunk from '{}': {}",
-                                self.index, msg.source, msg.payload
+                                "LLM test actor {} forwarded stream chunk to '{}'",
+                                self.index, self.stream_output_topic
                             );
                         }
                         Err(RecvError::Lagged(n)) => {

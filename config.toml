@@ -24,5 +24,5 @@ name = "default"
 user_topic = "ui:user"
 input_topic = "ui:input"
 buffer_size = 1000
-subscribe_to = ["sar:log", "sar:echo", "sar:reverse", "sar:llm:stream"]
+subscribe_to = ["sar:echo", "sar:reverse", "llm-test:0:stream"]
 route_to = ["llm-test:0:in"]
