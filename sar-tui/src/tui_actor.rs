@@ -83,10 +83,12 @@ impl Actor for TuiActor {
                             continue;
                         }
                         if meta_type == "StreamStats" {
+                            info!("TUI received StreamStats: {:?}", msg);
                             if let serde_json::Value::Object(ref obj) = msg.payload {
                                 if let Some(rxtokens_val) = obj.get("rxtokens").and_then(|v| v.as_u64()) {
                                     let mut state = state_clone.lock().await;
                                     state.update_rxtokens(rxtokens_val as usize);
+                                    info!("TUI updated rxtokens to {}", rxtokens_val);
                                 }
                             }
                             continue;

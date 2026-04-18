@@ -119,15 +119,47 @@ impl LlmActor {
                         if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
                             if !content.is_empty() {
                                 rxtokens += content.chars().count();
-                                let chunk_msg = Message::new(
-                                    &self.stream_topic,
-                                    &self.id(),
-                                    content.to_string(),
-                                ).with_type("LlmStream").with_stream_id(stream_id.clone());
-                                if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
-                                    error!("Failed to publish stream chunk: {}", e);
+                                let mut remaining = content.to_string();
+                                while let Some(think_start) = remaining.find("<thinking>") {
+                                    let thinking_content = &remaining[..think_start];
+                                    if !thinking_content.is_empty() {
+                                        let chunk_msg = Message::new(
+                                            &self.stream_topic,
+                                            &self.id(),
+                                            thinking_content.to_string(),
+                                        ).with_type("LlmStream").with_stream_id(stream_id.clone());
+                                        if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
+                                            error!("Failed to publish stream chunk: {}", e);
+                                        }
+                                        full_response.push_str(thinking_content);
+                                    }
+                                    remaining = remaining[think_start + "<thinking>".len()..].to_string();
                                 }
-                                full_response.push_str(content);
+                                if let Some(think_end) = remaining.find("</thinking>") {
+                                    let thinking_content = &remaining[..think_end];
+                                    if !thinking_content.is_empty() {
+                                        let chunk_msg = Message::new(
+                                            &self.stream_topic,
+                                            &self.id(),
+                                            thinking_content.to_string(),
+                                        ).with_type("LlmThinking").with_stream_id(stream_id.clone());
+                                        if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
+                                            error!("Failed to publish thinking chunk: {}", e);
+                                        }
+                                    }
+                                    remaining = remaining[think_end + "</thinking>".len()..].to_string();
+                                }
+                                if !remaining.is_empty() {
+                                    let chunk_msg = Message::new(
+                                        &self.stream_topic,
+                                        &self.id(),
+                                        remaining.to_string(),
+                                    ).with_type("LlmStream").with_stream_id(stream_id.clone());
+                                    if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
+                                        error!("Failed to publish stream chunk: {}", e);
+                                    }
+                                    full_response.push_str(&remaining);
+                                }
                             }
                         }
                     }
@@ -144,6 +176,7 @@ impl LlmActor {
             error!("Failed to publish stream end: {}", e);
         }
 
+        info!("LLM actor {} publishing stats: rxtokens={}", self.index, rxtokens);
         let stats_msg = Message::new(
             &self.stats_topic,
             &self.id(),
@@ -151,6 +184,8 @@ impl LlmActor {
         ).with_type("StreamStats").with_stream_id(stream_id);
         if let Err(e) = bus.publish(&self.id(), stats_msg).await {
             error!("Failed to publish stream stats: {}", e);
+        } else {
+            info!("LLM actor {} published stats to '{}'", self.index, self.stats_topic);
         }
 
         Ok(full_response)

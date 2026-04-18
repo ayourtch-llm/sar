@@ -95,12 +95,15 @@ impl Actor for UiHubActor {
                             if msg.source == hub_id {
                                 continue;
                             }
+                            let msg_type = classify_message(&topic_clone, &msg.payload, &msg.meta);
+                            info!("UI hub '{}' forwarder received from '{}': type={}, payload={}", hub_name, topic_clone, msg_type, msg.payload);
                             let mut forwarded = msg.clone();
                             forwarded.topic = user_topic.clone();
-                            let msg_type = classify_message(&topic_clone, &msg.payload, &msg.meta);
                             forwarded.meta = serde_json::json!({"type": msg_type});
                             if let Err(e) = bus.publish(&hub_id, forwarded).await {
                                 error!("UI hub '{}' failed to publish to user topic: {}", hub_name, e);
+                            } else {
+                                info!("UI hub '{}' forwarded to '{}'", hub_name, user_topic);
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
