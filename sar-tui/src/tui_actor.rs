@@ -279,7 +279,7 @@ impl Actor for TuiActor {
                                     if input.starts_with("/log ") {
                                         let log_msg = input.trim().trim_start_matches("/log ").trim().to_string();
                                         let msg = Message::text(
-                                            &self.user_topic,
+                                            &self.bottom_panel_topic,
                                             APP_ID,
                                             format!("[manual] {}", log_msg),
                                         );
