@@ -308,7 +308,8 @@ impl Actor for TuiActor {
         crossterm::terminal::disable_raw_mode()?;
         crossterm::execute!(
             std::io::stderr(),
-            crossterm::terminal::LeaveAlternateScreen
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture
         )?;
 
         Ok(())
