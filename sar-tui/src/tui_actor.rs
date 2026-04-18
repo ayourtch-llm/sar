@@ -170,6 +170,12 @@ impl Actor for TuiActor {
                 match &event {
                     Event::Key(key) => {
                         match key.code {
+                            KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
+                                state.horizontal_scroll = state.horizontal_scroll.saturating_sub(10);
+                            }
+                            KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
+                                state.horizontal_scroll += 10;
+                            }
                             KeyCode::Char('[') if key.modifiers == KeyModifiers::CONTROL => {
                                 state.at_bottom = false;
                                 let scroll_amount = if state.scroll >= PAGE_SIZE { PAGE_SIZE } else { state.scroll };
