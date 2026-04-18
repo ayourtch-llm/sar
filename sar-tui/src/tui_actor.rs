@@ -112,7 +112,7 @@ impl Actor for TuiActor {
 
             let snapshot = {
                 let s = state.lock().await;
-                RenderSnapshot::new(&s, s.visible_lines)
+                RenderSnapshot::new(&s)
             };
 
             terminal.draw(|frame| {
@@ -126,7 +126,7 @@ impl Actor for TuiActor {
                 let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                     .begin_symbol(Some("↑"))
                     .end_symbol(Some("↓"));
-                let mut scrollbar_state = ScrollbarState::new(snapshot.scrollable_range)
+                let mut scrollbar_state = ScrollbarState::new(snapshot.total_lines)
                     .position(snapshot.scroll);
                 frame.render_stateful_widget(scrollbar, chunks[0], &mut scrollbar_state);
 
@@ -176,7 +176,7 @@ impl Actor for TuiActor {
                                 state.scroll -= scroll_amount;
                             }
                             KeyCode::Char(']') if key.modifiers == KeyModifiers::CONTROL => {
-                                let max_scroll = state.max_scroll(state.visible_lines);
+                                let max_scroll = state.max_scroll(snapshot.visible_lines);
                                 let scroll_amount = if max_scroll - state.scroll >= PAGE_SIZE { PAGE_SIZE } else { max_scroll.saturating_sub(state.scroll) };
                                 state.scroll += scroll_amount;
                                 state.at_bottom = state.scroll >= max_scroll;
@@ -223,7 +223,7 @@ impl Actor for TuiActor {
                                     }
                                     if input.trim() == "/bottom" {
                                         state.at_bottom = true;
-                                        state.scroll = state.max_scroll(state.visible_lines);
+                                        state.scroll = state.max_scroll(snapshot.visible_lines);
                                         state.input_lines.clear();
                                         state.input_lines.push(String::new());
                                         state.active_line = 0;
@@ -263,7 +263,7 @@ impl Actor for TuiActor {
                                 state.scroll -= scroll_amount;
                             }
                             KeyCode::PageDown => {
-                                let max_scroll = state.max_scroll(state.visible_lines);
+                                let max_scroll = state.max_scroll(snapshot.visible_lines);
                                 let scroll_amount = if max_scroll - state.scroll >= PAGE_SIZE { PAGE_SIZE } else { max_scroll.saturating_sub(state.scroll) };
                                 state.scroll += scroll_amount;
                                 state.at_bottom = state.scroll >= max_scroll;
@@ -274,7 +274,7 @@ impl Actor for TuiActor {
                             }
                             KeyCode::End => {
                                 state.at_bottom = true;
-                                state.scroll = state.max_scroll(state.visible_lines);
+                                state.scroll = state.max_scroll(snapshot.visible_lines);
                             }
                             KeyCode::Left if key.modifiers == KeyModifiers::CONTROL => {
                                 state.horizontal_scroll = state.horizontal_scroll.saturating_sub(10);
@@ -296,7 +296,7 @@ impl Actor for TuiActor {
                                 }
                             }
                             MouseEventKind::ScrollDown => {
-                                let max_scroll = state.max_scroll(state.visible_lines);
+                                let max_scroll = state.max_scroll(snapshot.visible_lines);
                                 if state.scroll + PAGE_SIZE <= max_scroll {
                                     state.scroll += PAGE_SIZE;
                                 } else {
@@ -327,13 +327,14 @@ struct RenderSnapshot {
     log_text: Text<'static>,
     scroll: usize,
     horizontal_scroll: usize,
-    scrollable_range: usize,
+    total_lines: usize,
     input_line: String,
     status_text: Line<'static>,
+    visible_lines: usize,
 }
 
 impl RenderSnapshot {
-    fn new(state: &TuiState, log_height: usize) -> Self {
+    fn new(state: &TuiState) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
@@ -350,10 +351,11 @@ impl RenderSnapshot {
             pid()
         ));
         Self {
-            log_text: state.render_log(log_height),
+            log_text: state.render_log(),
             scroll: state.scroll,
             horizontal_scroll: state.horizontal_scroll,
-            scrollable_range: state.max_scroll(log_height),
+            total_lines: state.log_entries.len(),
+            visible_lines: state.visible_lines,
             input_line: state.input_lines[state.active_line].clone(),
             status_text,
         }
@@ -432,14 +434,11 @@ impl TuiState {
         }
     }
 
-    fn render_log(&self, visible_lines: usize) -> Text<'static> {
-        let max_scroll = self.max_scroll(visible_lines);
-        let start = self.scroll.min(max_scroll);
-        let end = (start + visible_lines).min(self.log_entries.len());
-        let visible: Vec<Line<'static>> = self.log_entries[start..end]
+    fn render_log(&self) -> Text<'static> {
+        let lines: Vec<Line<'static>> = self.log_entries
             .iter()
             .map(|line| Line::from(line.clone()))
             .collect();
-        Text::from(visible)
+        Text::from(lines)
     }
 }
