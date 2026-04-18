@@ -98,7 +98,8 @@ impl Actor for TuiActor {
                             format!("[{}] {}", msg.source, display)
                         };
                         let mut state = state_clone.lock().await;
-                        if msg.source.starts_with("sar-llm-") {
+                        let is_stream = msg.meta.get("type").and_then(|t| t.as_str()) == Some("LlmStream");
+                        if is_stream {
                             state.add_stream_chunk(text);
                         } else {
                             state.add_log_entry(text);

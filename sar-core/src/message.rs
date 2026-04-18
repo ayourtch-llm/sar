@@ -67,6 +67,11 @@ impl Message {
     ) -> Self {
         Self::new(topic, source, text.into())
     }
+
+    pub fn with_type(mut self, item_type: LogItemType) -> Self {
+        self.meta = serde_json::json!({"type": format!("{:?}", item_type)});
+        self
+    }
 }
 
 impl fmt::Display for Message {

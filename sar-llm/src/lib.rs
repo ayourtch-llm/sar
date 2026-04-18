@@ -105,7 +105,7 @@ impl LlmActor {
                                     &self.stream_topic,
                                     &self.id(),
                                     content.to_string(),
-                                );
+                                ).with_type(sar_core::message::LogItemType::LlmStream);
                                 if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
                                     error!("Failed to publish stream chunk: {}", e);
                                 }
