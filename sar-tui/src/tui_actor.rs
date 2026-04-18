@@ -291,6 +291,73 @@ impl Actor for TuiActor {
                                         state.active_line = 0;
                                         continue;
                                     }
+                                    if input.trim() == "/list actors" {
+                                        let actors = bus.list_actors().await;
+                                        let mut lines = vec!["=== Actors ===".to_string()];
+                                        for actor in &actors {
+                                            lines.push(format!("  {} ({} subscriptions, {} publications)", 
+                                                actor.id, actor.subscriptions.len(), actor.publications.len()));
+                                            for sub in &actor.subscriptions {
+                                                lines.push(format!("    - subscribes to: {}", sub));
+                                            }
+                                            for pub_topic in &actor.publications {
+                                                lines.push(format!("    - publishes to: {}", pub_topic));
+                                            }
+                                        }
+                                        if actors.is_empty() {
+                                            lines.push("  (no actors registered)".to_string());
+                                        }
+                                        for line in lines {
+                                            let msg = Message::text(
+                                                &self.user_topic,
+                                                APP_ID,
+                                                line,
+                                            );
+                                            if let Err(e) = bus.publish(msg).await {
+                                                error!("Failed to publish list actors message: {}", e);
+                                            }
+                                        }
+                                        state.input_lines.clear();
+                                        state.input_lines.push(String::new());
+                                        state.active_line = 0;
+                                        continue;
+                                    }
+                                    if input.trim() == "/list topics" {
+                                        let topics = bus.list_topic_info().await;
+                                        let mut lines = vec!["=== Topics ===".to_string()];
+                                        for topic in &topics {
+                                            lines.push(format!("  {} (capacity: {})", topic.name, topic.capacity));
+                                            if !topic.subscribers.is_empty() {
+                                                lines.push("    subscribers:".to_string());
+                                                for sub in &topic.subscribers {
+                                                    lines.push(format!("      - {}", sub));
+                                                }
+                                            }
+                                            if !topic.publishers.is_empty() {
+                                                lines.push("    publishers:".to_string());
+                                                for publisher in &topic.publishers {
+                                                    lines.push(format!("      - {}", publisher));
+                                                }
+                                            }
+                                        }
+                                        if topics.is_empty() {
+                                            lines.push("  (no topics)".to_string());
+                                        }
+                                        for line in lines {
+                                            let msg = Message::text(
+                                                &self.user_topic,
+                                                APP_ID,
+                                                line,
+                                            );
+                                            if let Err(e) = bus.publish(msg).await {
+                                                error!("Failed to publish list topics message: {}", e);
+                                            }
+                                        }
+                                        state.input_lines.clear();
+                                        state.input_lines.push(String::new());
+                                        state.active_line = 0;
+                                        continue;
+                                    }
                                     if !input.is_empty() {
                                         let msg = Message::text(
                                             &self.input_topic,
