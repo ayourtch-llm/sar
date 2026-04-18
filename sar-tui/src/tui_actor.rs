@@ -170,10 +170,10 @@ impl Actor for TuiActor {
                 match &event {
                     Event::Key(key) => {
                         match key.code {
-                            KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
+                            KeyCode::Left if key.modifiers == KeyModifiers::CONTROL => {
                                 state.horizontal_scroll = state.horizontal_scroll.saturating_sub(10);
                             }
-                            KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
+                            KeyCode::Right if key.modifiers == KeyModifiers::CONTROL => {
                                 state.horizontal_scroll += 10;
                             }
                             KeyCode::Char('[') if key.modifiers == KeyModifiers::CONTROL => {
@@ -281,12 +281,6 @@ impl Actor for TuiActor {
                             KeyCode::End => {
                                 state.at_bottom = true;
                                 state.scroll = state.max_scroll(snapshot.visible_lines);
-                            }
-                            KeyCode::Left if key.modifiers == KeyModifiers::CONTROL => {
-                                state.horizontal_scroll = state.horizontal_scroll.saturating_sub(10);
-                            }
-                            KeyCode::Right if key.modifiers == KeyModifiers::CONTROL => {
-                                state.horizontal_scroll += 10;
                             }
                             _ => {}
                         }
