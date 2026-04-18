@@ -20,6 +20,8 @@ pub struct TopicsConfig {
     pub input: String,
     #[serde(default = "default_echo_topic")]
     pub echo: String,
+    #[serde(default = "default_reverse_topic")]
+    pub reverse: String,
     #[serde(default = "default_server_topic")]
     pub server: String,
 }
@@ -48,6 +50,10 @@ fn default_input_topic() -> String {
 
 fn default_echo_topic() -> String {
     "sar:echo".to_string()
+}
+
+fn default_reverse_topic() -> String {
+    "sar:reverse".to_string()
 }
 
 fn default_server_topic() -> String {

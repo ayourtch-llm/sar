@@ -69,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     bus.create_topic(&config.topics.log, 1000).await;
     bus.create_topic(&config.topics.input, 100).await;
     bus.create_topic(&config.topics.echo, 100).await;
+    bus.create_topic(&config.topics.reverse, 100).await;
     bus.create_topic(&config.topics.server, 100).await;
 
     // Setup tracing with bus layer
@@ -103,6 +104,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.topics.log.clone(),
     );
     (*bus).spawn_actor(echo_actor).await?;
+
+    // Spawn reverse actor
+    let reverse_actor = sar_reverse::ReverseActor::new(
+        config.topics.reverse.clone(),
+        config.topics.log.clone(),
+    );
+    (*bus).spawn_actor(reverse_actor).await?;
 
     // Spawn server (detached - runs in background)
     let bus_for_server = bus.clone();

@@ -4,6 +4,7 @@ members = [
     "sar-core",
     "sar-tui",
     "sar-echo",
+    "sar-reverse",
     "sar-server",
     "sar-tracing",
 ]
@@ -22,6 +23,7 @@ path = "src/main.rs"
 sar-core = { path = "sar-core" }
 sar-tui = { path = "sar-tui" }
 sar-echo = { path = "sar-echo" }
+sar-reverse = { path = "sar-reverse" }
 sar-server = { path = "sar-server" }
 sar-tracing = { path = "sar-tracing" }
 tokio = { version = "1", features = ["full"] }

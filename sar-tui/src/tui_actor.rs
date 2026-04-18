@@ -21,15 +21,15 @@ const LIGHT_GRAY: Color = Color::Rgb(211, 211, 211);
 #[derive(Debug, Default)]
 pub struct TuiActor {
     log_topic: String,
-    input_topic: String,
+    default_target: String,
     show_bottom_panel: bool,
 }
 
 impl TuiActor {
-    pub fn new(log_topic: String, input_topic: String, show_bottom_panel: bool) -> Self {
+    pub fn new(log_topic: String, default_target: String, show_bottom_panel: bool) -> Self {
         Self {
             log_topic,
-            input_topic,
+            default_target,
             show_bottom_panel,
         }
     }
@@ -50,7 +50,7 @@ impl Actor for TuiActor {
 
         let state = Arc::new(Mutex::new(TuiState::new(
             self.show_bottom_panel,
-            self.input_topic.clone(),
+            self.default_target.clone(),
         )));
 
         let bus_clone = bus.clone();
@@ -158,9 +158,27 @@ impl Actor for TuiActor {
                                 if input.trim() == "/quit" {
                                     break;
                                 }
+                                if input.starts_with("/target ") {
+                                    let new_target = input.trim().trim_start_matches("/target ").trim().to_string();
+                                    if !new_target.is_empty() {
+                                        state.current_target = new_target.clone();
+                                        let info_msg = Message::text(
+                                            &state.current_target.clone(),
+                                            "system",
+                                            format!("Target changed to: {}", new_target),
+                                        );
+                                        if let Err(e) = bus.publish(info_msg).await {
+                                            error!("Failed to publish target change: {}", e);
+                                        }
+                                    }
+                                    state.input_lines.clear();
+                                    state.input_lines.push(String::new());
+                                    state.active_line = 0;
+                                    continue;
+                                }
                                 if !input.is_empty() {
                                     let msg = Message::text(
-                                        &state.input_topic,
+                                        &state.current_target,
                                         APP_ID,
                                         input.clone(),
                                     );
@@ -269,7 +287,7 @@ struct TuiState {
     active_line: usize,
     focus_input: bool,
     show_bottom_panel: bool,
-    input_topic: String,
+    current_target: String,
 }
 
 impl TuiState {
@@ -281,7 +299,7 @@ impl TuiState {
             active_line: 0,
             focus_input: true,
             show_bottom_panel,
-            input_topic,
+            current_target: input_topic,
         }
     }
 

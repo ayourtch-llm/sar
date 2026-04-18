@@ -2,6 +2,7 @@
 log = "sar:log"
 input = "sar:input"
 echo = "sar:echo"
+reverse = "sar:reverse"
 server = "sar:server"
 
 [server]
