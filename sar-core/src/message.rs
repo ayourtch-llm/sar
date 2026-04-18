@@ -4,6 +4,7 @@ use std::fmt;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum UiMessageType {
     UserInput,
+    LlmThinking,
     LlmStream,
     LlmStreamEnd,
     Echo,
@@ -18,6 +19,7 @@ impl fmt::Display for UiMessageType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             UiMessageType::UserInput => write!(f, "UserInput"),
+            UiMessageType::LlmThinking => write!(f, "LlmThinking"),
             UiMessageType::LlmStream => write!(f, "LlmStream"),
             UiMessageType::LlmStreamEnd => write!(f, "LlmStreamEnd"),
             UiMessageType::Echo => write!(f, "Echo"),

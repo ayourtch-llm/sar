@@ -87,13 +87,16 @@ impl Actor for TuiActor {
                             _ => msg.payload.to_string(),
                         };
                         let mut state = state_clone.lock().await;
+                        let is_thinking = meta_type == "LlmThinking";
                         let is_stream = meta_type == "LlmStream";
-                        let stream_id = if is_stream {
+                        let stream_id = if is_stream || is_thinking {
                             msg.meta.get("stream_id").and_then(|s| s.as_str()).map(|s| s.to_string())
                         } else {
                             None
                         };
-                        if is_stream {
+                        if is_thinking {
+                            state.add_thinking_chunk(display, stream_id);
+                        } else if is_stream {
                             state.add_stream_chunk(display, stream_id);
                         } else {
                             let text = if meta_type == "UserInput" {
@@ -559,6 +562,7 @@ struct TuiState {
     current_target: String,
     last_key: String,
     streaming_item_id: Option<String>,
+    thinking_item_id: Option<String>,
 }
 
 impl TuiState {
@@ -591,6 +595,7 @@ impl TuiState {
             current_target: input_topic,
             last_key: String::new(),
             streaming_item_id: None,
+            thinking_item_id: None,
         }
     }
 
@@ -666,6 +671,54 @@ impl TuiState {
         }
     }
 
+    fn add_thinking_chunk(&mut self, chunk: String, stream_id: Option<String>) {
+        let segments: Vec<&str> = chunk.split('\n').collect();
+        for (i, segment) in segments.iter().enumerate() {
+            let is_last = i == segments.len() - 1;
+            if self.thinking_item_id.is_none() {
+                let item_id = match stream_id {
+                    Some(ref id) => id.clone(),
+                    None => uuid::Uuid::new_v4().to_string(),
+                };
+                self.thinking_item_id = Some(item_id.clone());
+                self.log_items.push(LogItem {
+                    item_id,
+                    text: format!("  [thinking] {}", segment),
+                    height: 1,
+                });
+                if is_last {
+                    continue;
+                }
+                let new_item_id = uuid::Uuid::new_v4().to_string();
+                self.thinking_item_id = Some(new_item_id.clone());
+                self.log_items.push(LogItem {
+                    item_id: new_item_id,
+                    text: String::new(),
+                    height: 0,
+                });
+                continue;
+            }
+            if let Some(active_id) = &self.thinking_item_id {
+                if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
+                    item.text.push_str(segment);
+                    item.height = item.text.matches('\n').count() + 1;
+                    if !is_last {
+                        let new_item_id = uuid::Uuid::new_v4().to_string();
+                        self.thinking_item_id = Some(new_item_id.clone());
+                        self.log_items.push(LogItem {
+                            item_id: new_item_id,
+                            text: String::new(),
+                            height: 0,
+                        });
+                    }
+                }
+            }
+        }
+        if self.at_bottom {
+            self.scroll = self.max_scroll(self.visible_lines);
+        }
+    }
+
     fn finalize_stream(&mut self) {
         if let Some(active_id) = &self.streaming_item_id {
             if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
@@ -683,7 +736,13 @@ impl TuiState {
         let lines: Vec<Line<'static>> = self.log_items
             .iter()
             .flat_map(|item| {
-                item.text.split('\n').map(|part| Line::from(part.to_string())).collect::<Vec<_>>()
+                item.text.split('\n').map(|part| {
+                    if part.starts_with("  [thinking] ") {
+                        Line::from(part.to_string()).style(Style::default().fg(Color::DarkGray))
+                    } else {
+                        Line::from(part.to_string())
+                    }
+                }).collect::<Vec<_>>()
             })
             .collect();
         Text::from(lines)

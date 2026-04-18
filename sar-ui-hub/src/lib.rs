@@ -16,7 +16,14 @@ impl UiHubActor {
     }
 }
 
-fn classify_message(topic: &str, payload: &serde_json::Value) -> &'static str {
+fn classify_message(topic: &str, payload: &serde_json::Value, meta: &serde_json::Value) -> String {
+    if let serde_json::Value::Object(meta_obj) = meta {
+        if let Some(existing_type) = meta_obj.get("type").and_then(|t| t.as_str()) {
+            if existing_type == "LlmThinking" || existing_type == "LlmStream" || existing_type == "LlmStreamEnd" {
+                return existing_type.to_string();
+            }
+        }
+    }
     if topic.ends_with(":stream") {
         let is_stream_end = match payload {
             serde_json::Value::String(s) => {
@@ -32,15 +39,15 @@ fn classify_message(topic: &str, payload: &serde_json::Value) -> &'static str {
             _ => false,
         };
         if is_stream_end {
-            return "LlmStreamEnd";
+            return "LlmStreamEnd".to_string();
         }
-        return "LlmStream";
+        return "LlmStream".to_string();
     }
     match topic {
-        t if t.contains("echo") => "Echo",
-        t if t.contains("reverse") => "Reverse",
-        t if t.contains("log") => "Log",
-        _ => "Info",
+        t if t.contains("echo") => "Echo".to_string(),
+        t if t.contains("reverse") => "Reverse".to_string(),
+        t if t.contains("log") => "Log".to_string(),
+        _ => "Info".to_string(),
     }
 }
 
@@ -90,7 +97,7 @@ impl Actor for UiHubActor {
                             }
                             let mut forwarded = msg.clone();
                             forwarded.topic = user_topic.clone();
-                            let msg_type = classify_message(&topic_clone, &msg.payload);
+                            let msg_type = classify_message(&topic_clone, &msg.payload, &msg.meta);
                             forwarded.meta = serde_json::json!({"type": msg_type});
                             if let Err(e) = bus.publish(&hub_id, forwarded).await {
                                 error!("UI hub '{}' failed to publish to user topic: {}", hub_name, e);
