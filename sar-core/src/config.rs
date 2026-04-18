@@ -150,7 +150,7 @@ fn default_llm_model() -> String {
 }
 
 fn default_llm_base_url() -> String {
-    "https://api.openai.com/v1".to_string()
+    "http://ayourtch-desktop:8000/v1".to_string()
 }
 
 fn default_llm_api_key() -> String {
