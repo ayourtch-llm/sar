@@ -115,8 +115,8 @@ impl Actor for TuiActor {
                     .block(Block::default());
                 frame.render_widget(input_paragraph, chunks[2]);
                 frame.set_cursor_position((
-                    chunks[2].x + 1 + 2 + snapshot.input_line.len() as u16,
-                    chunks[2].y + 1,
+                    chunks[2].x + 2 + snapshot.input_line.len() as u16,
+                    chunks[2].y,
                 ));
 
                 if snapshot.show_bottom_panel {
