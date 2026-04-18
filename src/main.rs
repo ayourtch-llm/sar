@@ -74,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     bus.create_topic("llm:0:in", 100).await;
     bus.create_topic("llm:0:out", 1000).await;
     bus.create_topic("llm:0:stream", 1000).await;
+    bus.create_topic("llm-test:0:in", 100).await;
 
     // Setup tracing with bus layer
     let bus_layer = sar_tracing::BusLayer::new(
@@ -114,6 +115,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.topics.log.clone(),
     );
     (*bus).spawn_actor(reverse_actor).await?;
+
+    // Spawn LLM test actor
+    let llm_test_actor = sar_llm_test::LlmTestActor::new(
+        0,
+        "llm-test:0:in".to_string(),
+        "llm:0:in".to_string(),
+        "llm:0:out".to_string(),
+        "llm:0:stream".to_string(),
+    );
+    (*bus).spawn_actor(llm_test_actor).await?;
 
     // Spawn server (detached - runs in background)
     let bus_for_server = bus.clone();
