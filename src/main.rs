@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use sar_core::{Config, SarBus};
+use sar_llm::LlmActor;
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::fmt::MakeWriter;
@@ -115,6 +116,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.topics.log.clone(),
     );
     (*bus).spawn_actor(reverse_actor).await?;
+
+    // Spawn LLM actor
+    let llm_actor = LlmActor::new(
+        0,
+        "llm:0:in".to_string(),
+        "llm:0:out".to_string(),
+        "llm:0:stream".to_string(),
+        config.llm.clone(),
+    );
+    (*bus).spawn_actor(llm_actor).await?;
 
     // Spawn LLM test actor
     let llm_test_actor = sar_llm_test::LlmTestActor::new(
