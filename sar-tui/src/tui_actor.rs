@@ -276,6 +276,21 @@ impl Actor for TuiActor {
                                         state.active_line = 0;
                                         continue;
                                     }
+                                    if input.starts_with("/log ") {
+                                        let log_msg = input.trim().trim_start_matches("/log ").trim().to_string();
+                                        let msg = Message::text(
+                                            &self.user_topic,
+                                            APP_ID,
+                                            format!("[manual] {}", log_msg),
+                                        );
+                                        if let Err(e) = bus.publish(msg).await {
+                                            error!("Failed to publish log message: {}", e);
+                                        }
+                                        state.input_lines.clear();
+                                        state.input_lines.push(String::new());
+                                        state.active_line = 0;
+                                        continue;
+                                    }
                                     if !input.is_empty() {
                                         let msg = Message::text(
                                             &self.input_topic,
