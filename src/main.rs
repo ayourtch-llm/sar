@@ -9,17 +9,13 @@ use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::fmt::MakeWriter;
 
-enum LogTarget {
-    File(PathBuf),
-}
-
 struct LogWriter {
-    target: LogTarget,
+    path: Option<PathBuf>,
 }
 
 impl LogWriter {
-    fn new(target: LogTarget) -> Self {
-        Self { target }
+    fn new(path: Option<PathBuf>) -> Self {
+        Self { path }
     }
 }
 
@@ -27,13 +23,14 @@ impl<'a> MakeWriter<'a> for LogWriter {
     type Writer = Box<dyn Write + Send + Sync>;
     
     fn make_writer(&self) -> Self::Writer {
-        match &self.target {
-            LogTarget::File(path) => {
+        match &self.path {
+            Some(path) => {
                 match File::options().append(true).create(true).open(path) {
                     Ok(file) => Box::new(file),
                     Err(e) => panic!("Failed to open log file '{}': {}", path.display(), e),
                 }
             }
+            None => Box::new(std::io::sink()),
         }
     }
 }
@@ -50,8 +47,8 @@ struct Cli {
     verbose: bool,
 
     /// Log file path
-    #[arg(long, value_name = "FILE")]
-    log: PathBuf,
+    #[arg(long, value_name = "FILE", num_args = 1)]
+    log: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -87,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tracing_subscriber::EnvFilter::new("info")
     };
     
-    let log_writer = LogWriter::new(LogTarget::File(cli.log));
+    let log_writer = LogWriter::new(cli.log);
     
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
