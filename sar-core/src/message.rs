@@ -3,6 +3,8 @@ use std::fmt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+    #[serde(default)]
+    pub reference: String,
     pub topic: String,
     pub source: String,
     pub payload: serde_json::Value,
@@ -15,6 +17,21 @@ impl Message {
         payload: impl Into<serde_json::Value>,
     ) -> Self {
         Self {
+            reference: uuid::Uuid::new_v4().to_string(),
+            topic: topic.into(),
+            source: source.into(),
+            payload: payload.into(),
+        }
+    }
+
+    pub fn with_reference(
+        reference: String,
+        topic: impl Into<String>,
+        source: impl Into<String>,
+        payload: impl Into<serde_json::Value>,
+    ) -> Self {
+        Self {
+            reference,
             topic: topic.into(),
             source: source.into(),
             payload: payload.into(),
