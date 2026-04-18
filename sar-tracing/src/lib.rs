@@ -41,7 +41,7 @@ where
         
         let bus = self.bus.clone();
         tokio::spawn(async move {
-            if let Err(e) = bus.publish(msg).await {
+            if let Err(e) = bus.publish("sar-tracing", msg).await {
                 eprintln!("Failed to publish tracing message: {}", e);
             }
         });

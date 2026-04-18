@@ -28,7 +28,7 @@ impl Actor for ReverseActor {
     }
 
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut rx = bus.subscribe(&self.input_topic).await.map_err(|e| {
+        let mut rx = bus.subscribe(&self.id(), &self.input_topic).await.map_err(|e| {
             format!("Failed to subscribe to input topic '{}': {}", self.input_topic, e)
         })?;
 
@@ -44,7 +44,7 @@ impl Actor for ReverseActor {
                         APP_ID,
                         format!("reverse: {}", reversed.unwrap_or(msg.payload.to_string())),
                     );
-                    if let Err(e) = bus.publish(echo).await {
+                    if let Err(e) = bus.publish(&self.id(), echo).await {
                         error!("Failed to publish reverse: {}", e);
                     }
                 }

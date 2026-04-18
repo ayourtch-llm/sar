@@ -11,8 +11,8 @@ async fn setup_test_actors(mock_url: &str) -> (
     bus.create_topic("test:llm:out", 1000).await;
     bus.create_topic("test:llm:stream", 1000).await;
 
-    let out_rx = bus.subscribe("test:llm:out").await.unwrap();
-    let stream_rx = bus.subscribe("test:llm:stream").await.unwrap();
+    let out_rx = bus.subscribe("test", "test:llm:out").await.unwrap();
+    let stream_rx = bus.subscribe("test", "test:llm:stream").await.unwrap();
 
     let actor = LlmActor::new(
         0,
@@ -49,7 +49,7 @@ async fn test_llm_actor_simple_response() {
     };
 
     let msg = Message::new("test:llm:in", "test-source", serde_json::to_value(&request).unwrap());
-    bus.publish(msg).await.unwrap();
+    bus.publish("test", msg).await.unwrap();
 
     let response = tokio::time::timeout(
         tokio::time::Duration::from_secs(5),
@@ -81,7 +81,7 @@ async fn test_llm_actor_config_override() {
     };
 
     let msg = Message::new("test:llm:in", "test-source", serde_json::to_value(&request).unwrap());
-    bus.publish(msg).await.unwrap();
+    bus.publish("test", msg).await.unwrap();
 
     let response = tokio::time::timeout(
         tokio::time::Duration::from_secs(5),
@@ -113,7 +113,7 @@ async fn test_llm_actor_multiple_requests() {
         };
 
         let msg = Message::new("test:llm:in", "test-source", serde_json::to_value(&request).unwrap());
-        bus.publish(msg).await.unwrap();
+        bus.publish("test", msg).await.unwrap();
     }
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -144,7 +144,7 @@ async fn test_llm_actor_echo_fallback() {
     };
 
     let msg = Message::new("test:llm:in", "test-source", serde_json::to_value(&request).unwrap());
-    bus.publish(msg).await.unwrap();
+    bus.publish("test", msg).await.unwrap();
 
     let response = tokio::time::timeout(
         tokio::time::Duration::from_secs(5),
@@ -172,7 +172,7 @@ async fn test_llm_actor_verify_request_messages() {
     };
 
     let msg = Message::new("test:llm:in", "test-source", serde_json::to_value(&request).unwrap());
-    bus.publish(msg).await.unwrap();
+    bus.publish("test", msg).await.unwrap();
 
     let response = tokio::time::timeout(
         tokio::time::Duration::from_secs(5),
@@ -202,7 +202,7 @@ async fn test_llm_actor_config_defaults_used() {
     };
 
     let msg = Message::new("test:llm:in", "test-source", serde_json::to_value(&request).unwrap());
-    bus.publish(msg).await.unwrap();
+    bus.publish("test", msg).await.unwrap();
 
     let response = tokio::time::timeout(
         tokio::time::Duration::from_secs(5),

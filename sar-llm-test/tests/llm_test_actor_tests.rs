@@ -44,7 +44,7 @@ async fn test_llm_test_actor_publishes_to_llm() {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     let msg = Message::text("test:input", "test-user", "Hello, world!");
-    bus.publish(msg).await.unwrap();
+    bus.publish("test", msg).await.unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
@@ -68,7 +68,7 @@ async fn test_llm_test_actor_receives_output() {
     bus.create_topic("test:llm:out2", 1000).await;
     bus.create_topic("test:llm:stream2", 1000).await;
 
-    let mut out_rx = bus.subscribe("test:llm:out2").await.unwrap();
+    let mut out_rx = bus.subscribe("test", "test:llm:out2").await.unwrap();
 
     let llm_actor = LlmActor::new(
         0,
@@ -99,7 +99,7 @@ async fn test_llm_test_actor_receives_output() {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     let msg = Message::text("test:input2", "test-user", "Test input");
-    bus.publish(msg).await.unwrap();
+    bus.publish("test", msg).await.unwrap();
 
     let response = tokio::time::timeout(
         tokio::time::Duration::from_secs(5),
@@ -123,7 +123,7 @@ async fn test_llm_test_actor_receives_stream() {
     bus.create_topic("test:llm:out3", 1000).await;
     bus.create_topic("test:llm:stream3", 1000).await;
 
-    let mut stream_rx = bus.subscribe("test:llm:stream3").await.unwrap();
+    let mut stream_rx = bus.subscribe("test", "test:llm:stream3").await.unwrap();
 
     let llm_actor = LlmActor::new(
         0,
@@ -154,7 +154,7 @@ async fn test_llm_test_actor_receives_stream() {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     let msg = Message::text("test:input3", "test-user", "Stream test");
-    bus.publish(msg).await.unwrap();
+    bus.publish("test", msg).await.unwrap();
 
     let mut full_stream = String::new();
     loop {
@@ -198,7 +198,7 @@ async fn test_llm_test_actor_multiple_requests() {
     bus.create_topic("test:llm:out4", 1000).await;
     bus.create_topic("test:llm:stream4", 1000).await;
 
-    let mut out_rx = bus.subscribe("test:llm:out4").await.unwrap();
+    let mut out_rx = bus.subscribe("test", "test:llm:out4").await.unwrap();
 
     let llm_actor = LlmActor::new(
         0,
@@ -230,7 +230,7 @@ async fn test_llm_test_actor_multiple_requests() {
 
     for i in 1..=3 {
         let msg = Message::text("test:input4", "test-user", format!("Request {}", i));
-        bus.publish(msg).await.unwrap();
+        bus.publish("test", msg).await.unwrap();
     }
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;

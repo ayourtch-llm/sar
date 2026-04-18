@@ -66,7 +66,7 @@ impl Actor for TuiActor {
         let state_clone = state.clone();
         let user_topic_clone = self.user_topic.clone();
         tokio::spawn(async move {
-            let mut rx = match bus_clone.subscribe(&user_topic_clone).await {
+            let mut rx = match bus_clone.subscribe(APP_ID, &user_topic_clone).await {
                 Ok(rx) => rx,
                 Err(e) => {
                     error!("Failed to subscribe to user topic: {}", e);
@@ -100,7 +100,7 @@ impl Actor for TuiActor {
             let state_clone = state.clone();
             let bottom_topic_clone = self.bottom_panel_topic.clone();
             tokio::spawn(async move {
-                let mut rx = match bus_clone.subscribe(&bottom_topic_clone).await {
+                let mut rx = match bus_clone.subscribe(APP_ID, &bottom_topic_clone).await {
                     Ok(rx) => rx,
                     Err(e) => {
                         error!("Failed to subscribe to bottom panel topic: {}", e);
@@ -259,7 +259,7 @@ impl Actor for TuiActor {
                                                 "system",
                                                 format!("Target changed to: {}", new_target),
                                             );
-                                            if let Err(e) = bus.publish(info_msg).await {
+                                            if let Err(e) = bus.publish(APP_ID, info_msg).await {
                                                 error!("Failed to publish target change: {}", e);
                                             }
                                         }
@@ -283,7 +283,7 @@ impl Actor for TuiActor {
                                             APP_ID,
                                             format!("[manual] {}", log_msg),
                                         );
-                                        if let Err(e) = bus.publish(msg).await {
+                                        if let Err(e) = bus.publish(APP_ID, msg).await {
                                             error!("Failed to publish log message: {}", e);
                                         }
                                         state.input_lines.clear();
@@ -313,7 +313,7 @@ impl Actor for TuiActor {
                                                 APP_ID,
                                                 line,
                                             );
-                                            if let Err(e) = bus.publish(msg).await {
+                                            if let Err(e) = bus.publish(APP_ID, msg).await {
                                                 error!("Failed to publish list actors message: {}", e);
                                             }
                                         }
@@ -349,7 +349,7 @@ impl Actor for TuiActor {
                                                 APP_ID,
                                                 line,
                                             );
-                                            if let Err(e) = bus.publish(msg).await {
+                                            if let Err(e) = bus.publish(APP_ID, msg).await {
                                                 error!("Failed to publish list topics message: {}", e);
                                             }
                                         }
@@ -364,7 +364,7 @@ impl Actor for TuiActor {
                                             APP_ID,
                                             input.clone(),
                                         );
-                                        if let Err(e) = bus.publish(msg).await {
+                                        if let Err(e) = bus.publish(APP_ID, msg).await {
                                             error!("Failed to publish input: {}", e);
                                         }
                                     }

@@ -43,7 +43,7 @@ pub async fn publish(
     Json(req): Json<PublishRequest>,
 ) -> Result<Json<PublishResponse>, (StatusCode, Json<ServerState>)> {
     let msg = sar_core::message::Message::new(&req.topic, req.source, req.payload);
-    match bus.publish(msg).await {
+    match bus.publish("sar-server", msg).await {
         Ok(()) => {
             info!("Published to topic '{}'", req.topic);
             Ok(Json(PublishResponse {

@@ -32,7 +32,8 @@ impl Actor for UiHubActor {
             self.config.route_to.len()
         );
 
-        let mut input_rx = bus.subscribe(&self.config.input_topic).await
+        let hub_id = self.id();
+        let mut input_rx = bus.subscribe(&hub_id, &self.config.input_topic).await
             .map_err(|e| format!("Failed to subscribe to input topic '{}': {}", self.config.input_topic, e))?;
 
         info!("UI hub '{}' subscribed to input topic: {}", self.config.name, self.config.input_topic);
@@ -44,7 +45,7 @@ impl Actor for UiHubActor {
             let topic_clone = topic.clone();
             let user_topic = self.config.user_topic.clone();
             tokio::spawn(async move {
-                let mut rx = match bus.subscribe(&topic_clone).await {
+                let mut rx = match bus.subscribe(&hub_id, &topic_clone).await {
                     Ok(rx) => rx,
                     Err(e) => {
                         error!("UI hub '{}' failed to subscribe to producer topic '{}': {}", hub_name, topic_clone, e);
@@ -61,7 +62,7 @@ impl Actor for UiHubActor {
                             }
                             let mut forwarded = msg.clone();
                             forwarded.topic = user_topic.clone();
-                            if let Err(e) = bus.publish(forwarded).await {
+                            if let Err(e) = bus.publish(&hub_id, forwarded).await {
                                 error!("UI hub '{}' failed to publish to user topic: {}", hub_name, e);
                             }
                         }
@@ -86,7 +87,7 @@ impl Actor for UiHubActor {
                             &msg.source,
                             msg.payload.clone(),
                         );
-                        if let Err(e) = bus.publish(routed_msg).await {
+                        if let Err(e) = bus.publish(&hub_id, routed_msg).await {
                             error!("UI hub '{}' failed to route to '{}': {}", self.config.name, route_topic, e);
                         }
                     }

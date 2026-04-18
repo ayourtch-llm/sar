@@ -43,15 +43,15 @@ impl Actor for LlmTestActor {
     }
 
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut input_rx = bus.subscribe(&self.input_topic).await.map_err(|e| {
+        let mut input_rx = bus.subscribe(&self.id(), &self.input_topic).await.map_err(|e| {
             format!("Failed to subscribe to input topic '{}': {}", self.input_topic, e)
         })?;
 
-        let mut out_rx = bus.subscribe(&self.llm_out_topic).await.map_err(|e| {
+        let mut out_rx = bus.subscribe(&self.id(), &self.llm_out_topic).await.map_err(|e| {
             format!("Failed to subscribe to output topic '{}': {}", self.llm_out_topic, e)
         })?;
 
-        let mut stream_rx = bus.subscribe(&self.llm_stream_topic).await.map_err(|e| {
+        let mut stream_rx = bus.subscribe(&self.id(), &self.llm_stream_topic).await.map_err(|e| {
             format!("Failed to subscribe to stream topic '{}': {}", self.llm_stream_topic, e)
         })?;
 
@@ -97,7 +97,7 @@ impl Actor for LlmTestActor {
                                     .map_err(|e| format!("Failed to serialize LLM request: {}", e))?,
                             );
 
-                            if let Err(e) = bus.publish(msg).await {
+                            if let Err(e) = bus.publish(&self.id(), msg).await {
                                 error!("Failed to publish to LLM input: {}", e);
                             }
                         }

@@ -13,7 +13,7 @@ async fn test_reverse_actor_reverses_text() {
     bus.create_topic("test:input", 100).await;
     bus.create_topic("test:log", 100).await;
     
-    let mut log_rx = bus.subscribe("test:log").await.unwrap();
+    let mut log_rx = bus.subscribe("test", "test:log").await.unwrap();
     
     let actor = ReverseActor::new("test:input".to_string(), "test:log".to_string());
     let handle = bus.spawn_actor(actor).await.unwrap();
@@ -21,7 +21,7 @@ async fn test_reverse_actor_reverses_text() {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     
     let msg = Message::text("test:input", "test-source", "hello");
-    bus.publish(msg).await.unwrap();
+    bus.publish("test", msg).await.unwrap();
     
     let received = log_rx.recv().await.unwrap();
     assert_eq!(received.source, "sar-reverse");
@@ -36,7 +36,7 @@ async fn test_reverse_actor_reverses_longer_text() {
     bus.create_topic("test:input2", 100).await;
     bus.create_topic("test:log2", 100).await;
     
-    let mut log_rx = bus.subscribe("test:log2").await.unwrap();
+    let mut log_rx = bus.subscribe("test", "test:log2").await.unwrap();
     
     let actor = ReverseActor::new("test:input2".to_string(), "test:log2".to_string());
     let handle = bus.spawn_actor(actor).await.unwrap();
@@ -44,7 +44,7 @@ async fn test_reverse_actor_reverses_longer_text() {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     
     let msg = Message::text("test:input2", "source", "test reverse");
-    bus.publish(msg).await.unwrap();
+    bus.publish("test", msg).await.unwrap();
     
     let received = log_rx.recv().await.unwrap();
     assert_eq!(received.payload, serde_json::json!("reverse: esrever tset"));
@@ -58,7 +58,7 @@ async fn test_reverse_actor_multiple_messages() {
     bus.create_topic("test:input3", 100).await;
     bus.create_topic("test:log3", 100).await;
     
-    let mut log_rx = bus.subscribe("test:log3").await.unwrap();
+    let mut log_rx = bus.subscribe("test", "test:log3").await.unwrap();
     
     let actor = ReverseActor::new("test:input3".to_string(), "test:log3".to_string());
     let handle = bus.spawn_actor(actor).await.unwrap();
@@ -73,7 +73,7 @@ async fn test_reverse_actor_multiple_messages() {
     
     for (input, _expected) in &test_cases {
         let msg = Message::text("test:input3", "source", *input);
-        bus.publish(msg).await.unwrap();
+        bus.publish("test", msg).await.unwrap();
     }
     
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -93,7 +93,7 @@ async fn test_reverse_actor_with_non_string_payload() {
     bus.create_topic("test:input4", 100).await;
     bus.create_topic("test:log4", 100).await;
     
-    let mut log_rx = bus.subscribe("test:log4").await.unwrap();
+    let mut log_rx = bus.subscribe("test", "test:log4").await.unwrap();
     
     let actor = ReverseActor::new("test:input4".to_string(), "test:log4".to_string());
     let handle = bus.spawn_actor(actor).await.unwrap();
@@ -102,7 +102,7 @@ async fn test_reverse_actor_with_non_string_payload() {
     
     let json_payload = serde_json::json!({"key": "value"});
     let msg = Message::new("test:input4", "source", json_payload);
-    bus.publish(msg).await.unwrap();
+    bus.publish("test", msg).await.unwrap();
     
     let received = log_rx.recv().await.unwrap();
     assert_eq!(received.source, "sar-reverse");

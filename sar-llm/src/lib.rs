@@ -101,7 +101,7 @@ impl LlmActor {
                                     &self.id(),
                                     content.to_string(),
                                 );
-                                if let Err(e) = bus.publish(chunk_msg).await {
+                                if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
                                     error!("Failed to publish stream chunk: {}", e);
                                 }
                                 full_response.push_str(content);
@@ -123,7 +123,7 @@ impl Actor for LlmActor {
     }
 
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut rx = bus.subscribe(&self.input_topic).await.map_err(|e| {
+        let mut rx = bus.subscribe(&self.id(), &self.input_topic).await.map_err(|e| {
             format!("Failed to subscribe to input topic '{}': {}", self.input_topic, e)
         })?;
 
@@ -155,7 +155,7 @@ impl Actor for LlmActor {
                                 &self.id(),
                                 full_response,
                             );
-                            if let Err(e) = bus.publish(out_msg).await {
+                            if let Err(e) = bus.publish(&self.id(), out_msg).await {
                                 error!("Failed to publish LLM response: {}", e);
                             }
                         }
@@ -166,7 +166,7 @@ impl Actor for LlmActor {
                                 &self.id(),
                                 format!("Error: {}", e),
                             );
-                            if let Err(e) = bus.publish(error_msg).await {
+                            if let Err(e) = bus.publish(&self.id(), error_msg).await {
                                 error!("Failed to publish error message: {}", e);
                             }
                         }

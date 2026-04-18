@@ -56,7 +56,7 @@ impl SarBus {
         }
     }
 
-    pub async fn publish(&self, message: Message) -> Result<(), BusError> {
+    pub async fn publish(&self, actor_id: &str, message: Message) -> Result<(), BusError> {
         let topic = message.topic.clone();
         let capacity = 1000;
         self.ensure_topic(&topic, capacity).await;
@@ -67,6 +67,7 @@ impl SarBus {
                 if sender.send(message).is_err() {
                     debug!("No subscribers for topic: {}", topic);
                 }
+                self.register_actor(actor_id, &topic, false).await;
                 Ok(())
             }
             None => {
@@ -76,7 +77,7 @@ impl SarBus {
         }
     }
 
-    pub async fn subscribe(&self, topic: &str) -> Result<broadcast::Receiver<Message>, BusError> {
+    pub async fn subscribe(&self, actor_id: &str, topic: &str) -> Result<broadcast::Receiver<Message>, BusError> {
         let capacity = 1000;
         self.ensure_topic(topic, capacity).await;
         
@@ -85,6 +86,7 @@ impl SarBus {
             Some((sender, _)) => {
                 let receiver = sender.subscribe();
                 debug!("Subscribed to topic: {}", topic);
+                self.register_actor(actor_id, topic, true).await;
                 Ok(receiver)
             }
             None => Err(BusError::UnknownTopic(topic.to_string())),

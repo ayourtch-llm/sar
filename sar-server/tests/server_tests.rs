@@ -57,7 +57,7 @@ async fn test_list_topics_endpoint() {
 async fn test_publish_endpoint_success() {
     let (app, bus) = setup_test_app().await;
     
-    let mut rx = bus.subscribe("test:topic").await.unwrap();
+    let mut rx = bus.subscribe("test", "test:topic").await.unwrap();
     
     let request = Request::builder()
         .method(Method::POST)
@@ -105,7 +105,7 @@ async fn test_publish_endpoint_unknown_topic() {
 async fn test_publish_with_json_payload() {
     let (app, bus) = setup_test_app().await;
     
-    let mut rx = bus.subscribe("test:topic").await.unwrap();
+    let mut rx = bus.subscribe("test", "test:topic").await.unwrap();
     
     let request = Request::builder()
         .method(Method::POST)
