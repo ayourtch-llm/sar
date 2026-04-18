@@ -34,12 +34,6 @@ impl LlmTestActor {
         self
     }
 
-    pub fn wrap_in_xml(&self, prompt: &str) -> String {
-        format!(
-            "<llm-request>\n  <prompt>{}</prompt>\n</llm-request>",
-            prompt.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-        )
-    }
 }
 
 #[async_trait::async_trait]
@@ -81,15 +75,8 @@ impl Actor for LlmTestActor {
                                 None => msg.payload.to_string(),
                             };
 
-                            let xml_prompt = self.wrap_in_xml(&prompt);
-
-                            info!(
-                                "LLM test actor {} wrapping prompt in XML: {}",
-                                self.index, xml_prompt
-                            );
-
                             let llm_request = LlmRequest {
-                                prompt: xml_prompt,
+                                prompt,
                                 config: if self.llm_base_url.is_empty() {
                                     None
                                 } else {

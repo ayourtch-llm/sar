@@ -3,38 +3,6 @@ use sar_llm::LlmActor;
 use sar_llm_test::LlmTestActor;
 
 #[tokio::test]
-async fn test_llm_test_actor_wraps_in_xml() {
-    let actor = LlmTestActor::new(
-        0,
-        "test:input".to_string(),
-        "test:llm:in".to_string(),
-        "test:llm:out".to_string(),
-        "test:llm:stream".to_string(),
-    );
-
-    let xml = actor.wrap_in_xml("Hello, world!");
-    assert!(xml.contains("<llm-request>"));
-    assert!(xml.contains("<prompt>Hello, world!</prompt>"));
-    assert!(xml.contains("</llm-request>"));
-}
-
-#[tokio::test]
-async fn test_llm_test_actor_escapes_xml_special_chars() {
-    let actor = LlmTestActor::new(
-        0,
-        "test:input".to_string(),
-        "test:llm:in".to_string(),
-        "test:llm:out".to_string(),
-        "test:llm:stream".to_string(),
-    );
-
-    let xml = actor.wrap_in_xml("Test <tag> & \"quotes\"");
-    assert!(xml.contains("&lt;tag&gt;"));
-    assert!(xml.contains("&amp;"));
-    assert!(xml.contains("&quot;quotes&quot;") || xml.contains("\"quotes\""));
-}
-
-#[tokio::test]
 async fn test_llm_test_actor_publishes_to_llm() {
     let mock = mockllm::MockLlmServer::builder()
         .next(mockllm::Response::text("LLM response"))
@@ -84,8 +52,7 @@ async fn test_llm_test_actor_publishes_to_llm() {
     let request_body = mock.request(0).unwrap();
     assert!(request_body["messages"][0]["content"].is_string());
     let content = request_body["messages"][0]["content"].as_str().unwrap();
-    assert!(content.contains("<llm-request>"));
-    assert!(content.contains("<prompt>Hello, world!</prompt>"));
+    assert_eq!(content, "Hello, world!");
 }
 
 #[tokio::test]
