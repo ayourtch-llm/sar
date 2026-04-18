@@ -82,6 +82,15 @@ impl Actor for TuiActor {
                             state.finalize_stream();
                             continue;
                         }
+                        if meta_type == "StreamStats" {
+                            if let serde_json::Value::Object(ref obj) = msg.payload {
+                                if let Some(rxtokens_val) = obj.get("rxtokens").and_then(|v| v.as_u64()) {
+                                    let mut state = state_clone.lock().await;
+                                    state.update_rxtokens(rxtokens_val as usize);
+                                }
+                            }
+                            continue;
+                        }
                         let display = match &msg.payload {
                             serde_json::Value::String(s) => s.clone(),
                             _ => msg.payload.to_string(),
@@ -494,10 +503,11 @@ impl RenderSnapshot {
             seconds % 60
         );
         let status_text = Line::from(format!(
-            " {} | PID {} | {} ",
+            " {} | PID {} | {} | rxtokens: {} ",
             time_str,
             pid(),
-            if state.last_key.is_empty() { "" } else { &state.last_key }
+            if state.last_key.is_empty() { "" } else { &state.last_key },
+            state.rxtokens
         ));
         Self {
             log_text: state.render_log(),
@@ -563,6 +573,7 @@ struct TuiState {
     last_key: String,
     streaming_item_id: Option<String>,
     thinking_item_id: Option<String>,
+    rxtokens: usize,
 }
 
 impl TuiState {
@@ -596,6 +607,7 @@ impl TuiState {
             last_key: String::new(),
             streaming_item_id: None,
             thinking_item_id: None,
+            rxtokens: 0,
         }
     }
 
@@ -717,6 +729,10 @@ impl TuiState {
         if self.at_bottom {
             self.scroll = self.max_scroll(self.visible_lines);
         }
+    }
+
+    fn update_rxtokens(&mut self, new_rxtokens: usize) {
+        self.rxtokens = new_rxtokens;
     }
 
     fn finalize_stream(&mut self) {

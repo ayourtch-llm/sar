@@ -15,22 +15,29 @@ pub struct LlmRequest {
     pub config: Option<LlmConfig>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamStats {
+    pub rxtokens: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct LlmActor {
     pub index: usize,
     pub input_topic: String,
     pub output_topic: String,
     pub stream_topic: String,
+    pub stats_topic: String,
     pub config: LlmConfig,
 }
 
 impl LlmActor {
-    pub fn new(index: usize, input_topic: String, output_topic: String, stream_topic: String, config: LlmConfig) -> Self {
+    pub fn new(index: usize, input_topic: String, output_topic: String, stream_topic: String, stats_topic: String, config: LlmConfig) -> Self {
         Self {
             index,
             input_topic,
             output_topic,
             stream_topic,
+            stats_topic,
             config,
         }
     }
@@ -79,6 +86,7 @@ impl LlmActor {
         let mut full_response = String::new();
         let mut in_thinking = false;
         let mut stream = response.bytes_stream();
+        let mut rxtokens: usize = 0;
 
         while let Some(chunk) = stream.next().await {
             let chunk = match chunk {
@@ -98,6 +106,7 @@ impl LlmActor {
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
                         if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
                             if !content.is_empty() {
+                                rxtokens += content.chars().count();
                                 let mut remaining = content.to_string();
                                 while let Some(think_start) = remaining.find("<thinking>") {
                                     let thinking_content = &remaining[..think_start];
@@ -158,9 +167,18 @@ impl LlmActor {
             &self.stream_topic,
             &self.id(),
             serde_json::json!({"type": "stream_end"}),
-        ).with_type("LlmStreamEnd").with_stream_id(stream_id);
+        ).with_type("LlmStreamEnd").with_stream_id(stream_id.clone());
         if let Err(e) = bus.publish(&self.id(), end_msg).await {
             error!("Failed to publish stream end: {}", e);
+        }
+
+        let stats_msg = Message::new(
+            &self.stats_topic,
+            &self.id(),
+            serde_json::to_value(&StreamStats { rxtokens }).unwrap(),
+        ).with_type("StreamStats").with_stream_id(stream_id);
+        if let Err(e) = bus.publish(&self.id(), stats_msg).await {
+            error!("Failed to publish stream stats: {}", e);
         }
 
         Ok(full_response)
