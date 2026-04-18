@@ -19,19 +19,22 @@ use tracing::{error, info, warn};
 const APP_ID: &str = "sar-tui";
 const LIGHT_GRAY: Color = Color::Rgb(211, 211, 211);
 const PAGE_SIZE: usize = 10;
+const BOTTOM_PAGE_SIZE: usize = 1;
 
 #[derive(Debug, Default)]
 pub struct TuiActor {
     user_topic: String,
     input_topic: String,
+    bottom_panel_topic: String,
     show_bottom_panel: bool,
 }
 
 impl TuiActor {
-    pub fn new(user_topic: String, input_topic: String, show_bottom_panel: bool) -> Self {
+    pub fn new(user_topic: String, input_topic: String, bottom_panel_topic: String, show_bottom_panel: bool) -> Self {
         Self {
             user_topic,
             input_topic,
+            bottom_panel_topic,
             show_bottom_panel,
         }
     }
@@ -92,6 +95,41 @@ impl Actor for TuiActor {
             }
         });
 
+        if self.show_bottom_panel {
+            let bus_clone = bus.clone();
+            let state_clone = state.clone();
+            let bottom_topic_clone = self.bottom_panel_topic.clone();
+            tokio::spawn(async move {
+                let mut rx = match bus_clone.subscribe(&bottom_topic_clone).await {
+                    Ok(rx) => rx,
+                    Err(e) => {
+                        error!("Failed to subscribe to bottom panel topic: {}", e);
+                        return;
+                    }
+                };
+                loop {
+                    match rx.recv().await {
+                        Ok(msg) => {
+                            let display = match &msg.payload {
+                                serde_json::Value::String(s) => s.clone(),
+                                _ => msg.payload.to_string(),
+                            };
+                            let text = format!("[{}] {}", msg.source, display);
+                            let mut state = state_clone.lock().await;
+                            state.add_bottom_entry(text);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("TUI bottom panel reader lagged behind, dropped {} messages", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            info!("Bottom panel topic channel closed");
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+
         loop {
             let show_bottom = {
                 let s = state.lock().await;
@@ -150,16 +188,17 @@ impl Actor for TuiActor {
                 ));
 
                 if show_bottom {
-                    let info_text = Text::from(vec![
-                        Line::from(" Ready "),
-                        Line::from(""),
-                        Line::from(" SAR v0.1.0 "),
-                        Line::from(" Press /quit or Ctrl+C to quit "),
-                        Line::from(""),
-                    ]);
-                    let info_paragraph = Paragraph::new(info_text)
-                        .block(Block::default().style(Style::default().bg(LIGHT_GRAY)));
-                    frame.render_widget(info_paragraph, chunks[3]);
+                    let bottom_paragraph = Paragraph::new(snapshot.bottom_text)
+                        .block(Block::default())
+                        .scroll((snapshot.bottom_scroll as u16, 0));
+                    frame.render_widget(bottom_paragraph, chunks[3]);
+
+                    let bottom_scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                        .begin_symbol(Some("↑"))
+                        .end_symbol(Some("↓"));
+                    let mut bottom_scrollbar_state = ScrollbarState::new(snapshot.bottom_total_lines)
+                        .position(snapshot.bottom_scroll);
+                    frame.render_stateful_widget(bottom_scrollbar, chunks[3], &mut bottom_scrollbar_state);
                 }
             })?;
 
@@ -330,6 +369,9 @@ struct RenderSnapshot {
     scroll: usize,
     horizontal_scroll: usize,
     total_lines: usize,
+    bottom_text: Text<'static>,
+    bottom_scroll: usize,
+    bottom_total_lines: usize,
     input_line: String,
     status_text: Line<'static>,
     visible_lines: usize,
@@ -358,6 +400,9 @@ impl RenderSnapshot {
             scroll: state.scroll,
             horizontal_scroll: state.horizontal_scroll,
             total_lines: state.total_rendered_lines(),
+            bottom_text: state.render_bottom(),
+            bottom_scroll: state.bottom_scroll,
+            bottom_total_lines: state.bottom_total_rendered_lines(),
             visible_lines: state.visible_lines,
             input_line: state.input_lines[state.active_line].clone(),
             status_text,
@@ -402,6 +447,9 @@ struct TuiState {
     horizontal_scroll: usize,
     at_bottom: bool,
     visible_lines: usize,
+    bottom_items: Vec<LogItem>,
+    bottom_scroll: usize,
+    bottom_at_bottom: bool,
     input_lines: Vec<String>,
     active_line: usize,
     focus_input: bool,
@@ -418,6 +466,9 @@ impl TuiState {
             horizontal_scroll: 0,
             at_bottom: true,
             visible_lines: 24,
+            bottom_items: Vec::new(),
+            bottom_scroll: 0,
+            bottom_at_bottom: true,
             input_lines: vec![String::new()],
             active_line: 0,
             focus_input: true,
@@ -456,6 +507,47 @@ impl TuiState {
                 item.text.split('\n').map(|part| Line::from(part.to_string())).collect::<Vec<_>>()
             })
             .collect();
+        Text::from(lines)
+    }
+
+    fn add_bottom_entry(&mut self, entry: String) {
+        let height = entry.matches('\n').count() + 1;
+        self.bottom_items.push(LogItem {
+            text: entry,
+            height,
+        });
+        if self.bottom_items.len() > 100 {
+            self.bottom_items.drain(..10);
+        }
+        if self.bottom_at_bottom {
+            self.bottom_scroll = self.bottom_total_rendered_lines().saturating_sub(5);
+        }
+    }
+
+    fn bottom_total_rendered_lines(&self) -> usize {
+        self.bottom_items.iter().map(|item| item.height).sum()
+    }
+
+    fn render_bottom(&self) -> Text<'static> {
+        let max_scroll = self.bottom_total_rendered_lines().saturating_sub(5);
+        let start = self.bottom_scroll.min(max_scroll);
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut current_line = 0;
+        for item in &self.bottom_items {
+            let item_lines: Vec<Line<'static>> = item.text.split('\n').map(|part| Line::from(part.to_string())).collect();
+            for line in item_lines {
+                if current_line >= start && current_line < start + 5 {
+                    lines.push(line);
+                }
+                current_line += 1;
+                if current_line > start + 5 {
+                    break;
+                }
+            }
+            if current_line > start + 5 {
+                break;
+            }
+        }
         Text::from(lines)
     }
 }
