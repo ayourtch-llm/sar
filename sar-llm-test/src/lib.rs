@@ -150,8 +150,8 @@ impl Actor for LlmTestActor {
                                 error!("Failed to forward stream chunk: {}", e);
                             }
                             info!(
-                                "LLM test actor {} forwarded stream chunk to '{}'",
-                                self.index, self.stream_output_topic
+                                "LLM test actor {} forwarded stream chunk to '{}': {:?}",
+                                self.index, self.stream_output_topic, msg
                             );
                         }
                         Err(RecvError::Lagged(n)) => {
