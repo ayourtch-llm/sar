@@ -118,7 +118,7 @@ impl Actor for TuiActor {
                         } else if meta_type == "LlmToolResult" {
                             state.thinking_item_id = None;
                             state.streaming_item_id = None;
-                            state.add_tool_call_chunk(display, "  [tool_result] ");
+                            state.add_tool_result_chunk(display, "  [tool_result] ");
                         } else if meta_type == "LlmDump" {
                             state.thinking_item_id = None;
                             state.streaming_item_id = None;
@@ -592,6 +592,7 @@ struct TuiState {
     streaming_item_id: Option<String>,
     thinking_item_id: Option<String>,
     tool_call_item_id: Option<String>,
+    tool_result_item_id: Option<String>,
     rxtokens: usize,
 }
 
@@ -628,6 +629,7 @@ impl TuiState {
             streaming_item_id: None,
             thinking_item_id: None,
             tool_call_item_id: None,
+            tool_result_item_id: None,
             rxtokens: 0,
         }
     }
@@ -782,6 +784,29 @@ impl TuiState {
         }
     }
 
+    fn add_tool_result_chunk(&mut self, chunk: String, prefix: &str) {
+        if self.tool_result_item_id.is_none() {
+            let item_id = uuid::Uuid::new_v4().to_string();
+            self.tool_result_item_id = Some(item_id.clone());
+            self.log_items.push(LogItem {
+                item_id,
+                text: format!("{}{}", prefix, chunk),
+                height: chunk.matches('\n').count() + 1,
+                is_dump: false,
+            });
+            return;
+        }
+        if let Some(active_id) = &self.tool_result_item_id {
+            if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
+                item.text = format!("{}{}", prefix, chunk);
+                item.height = chunk.matches('\n').count() + 1;
+            }
+        }
+        if self.at_bottom {
+            self.scroll = self.max_scroll(self.visible_lines);
+        }
+    }
+
     fn finalize_tool_call(&mut self) {
         if let Some(active_id) = &self.tool_call_item_id {
             if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
@@ -790,6 +815,13 @@ impl TuiState {
             }
         }
         self.tool_call_item_id = None;
+        if let Some(active_id) = &self.tool_result_item_id {
+            if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
+                item.text.push('\n');
+                item.height = item.text.matches('\n').count() + 1;
+            }
+        }
+        self.tool_result_item_id = None;
         if self.at_bottom {
             self.scroll = self.max_scroll(self.visible_lines);
         }
