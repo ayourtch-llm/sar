@@ -22,16 +22,16 @@ const PAGE_SIZE: usize = 10;
 
 #[derive(Debug, Default)]
 pub struct TuiActor {
-    log_topic: String,
-    default_target: String,
+    user_topic: String,
+    input_topic: String,
     show_bottom_panel: bool,
 }
 
 impl TuiActor {
-    pub fn new(log_topic: String, default_target: String, show_bottom_panel: bool) -> Self {
+    pub fn new(user_topic: String, input_topic: String, show_bottom_panel: bool) -> Self {
         Self {
-            log_topic,
-            default_target,
+            user_topic,
+            input_topic,
             show_bottom_panel,
         }
     }
@@ -56,17 +56,17 @@ impl Actor for TuiActor {
 
         let state = Arc::new(Mutex::new(TuiState::new(
             self.show_bottom_panel,
-            self.default_target.clone(),
+            self.input_topic.clone(),
         )));
 
         let bus_clone = bus.clone();
         let state_clone = state.clone();
-        let log_topic_clone = self.log_topic.clone();
+        let user_topic_clone = self.user_topic.clone();
         tokio::spawn(async move {
-            let mut rx = match bus_clone.subscribe(&log_topic_clone).await {
+            let mut rx = match bus_clone.subscribe(&user_topic_clone).await {
                 Ok(rx) => rx,
                 Err(e) => {
-                    error!("Failed to subscribe to log: {}", e);
+                    error!("Failed to subscribe to user topic: {}", e);
                     return;
                 }
             };
@@ -82,10 +82,10 @@ impl Actor for TuiActor {
                         state.add_log_entry(text);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("TUI log reader lagged behind, dropped {} messages", n);
+                        warn!("TUI user reader lagged behind, dropped {} messages", n);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        info!("Log topic channel closed");
+                        info!("User topic channel closed");
                         break;
                     }
                 }
@@ -216,7 +216,7 @@ impl Actor for TuiActor {
                                         if !new_target.is_empty() {
                                             state.current_target = new_target.clone();
                                             let info_msg = Message::text(
-                                                &self.log_topic,
+                                                &self.user_topic,
                                                 "system",
                                                 format!("Target changed to: {}", new_target),
                                             );
@@ -239,7 +239,7 @@ impl Actor for TuiActor {
                                     }
                                     if !input.is_empty() {
                                         let msg = Message::text(
-                                            &state.current_target,
+                                            &self.input_topic,
                                             APP_ID,
                                             input.clone(),
                                         );

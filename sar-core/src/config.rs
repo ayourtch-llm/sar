@@ -12,6 +12,8 @@ pub struct Config {
     pub ui: UiConfig,
     #[serde(default = "default_llm")]
     pub llm: LlmConfig,
+    #[serde(default = "default_ui_hubs")]
+    pub ui_hubs: Vec<UiHubConfig>,
 }
 
 fn default_llm() -> LlmConfig {
@@ -28,6 +30,10 @@ fn default_server() -> ServerConfig {
 
 fn default_ui() -> UiConfig {
     UiConfig::default()
+}
+
+fn default_ui_hubs() -> Vec<UiHubConfig> {
+    vec![UiHubConfig::default()]
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,6 +119,35 @@ impl Default for LlmConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct UiHubConfig {
+    #[serde(default = "default_ui_hub_name")]
+    pub name: String,
+    #[serde(default = "default_ui_hub_user_topic")]
+    pub user_topic: String,
+    #[serde(default = "default_ui_hub_input_topic")]
+    pub input_topic: String,
+    #[serde(default = "default_ui_hub_buffer_size")]
+    pub buffer_size: usize,
+    #[serde(default)]
+    pub subscribe_to: Vec<String>,
+    #[serde(default)]
+    pub route_to: Vec<String>,
+}
+
+impl Default for UiHubConfig {
+    fn default() -> Self {
+        Self {
+            name: default_ui_hub_name(),
+            user_topic: default_ui_hub_user_topic(),
+            input_topic: default_ui_hub_input_topic(),
+            buffer_size: default_ui_hub_buffer_size(),
+            subscribe_to: vec![],
+            route_to: vec![],
+        }
+    }
+}
+
 fn default_log_topic() -> String {
     "sar:log".to_string()
 }
@@ -163,6 +198,22 @@ fn default_llm_temperature() -> f32 {
 
 fn default_llm_max_tokens() -> i32 {
     2048
+}
+
+fn default_ui_hub_name() -> String {
+    "default".to_string()
+}
+
+fn default_ui_hub_user_topic() -> String {
+    "ui:user".to_string()
+}
+
+fn default_ui_hub_input_topic() -> String {
+    "ui:input".to_string()
+}
+
+fn default_ui_hub_buffer_size() -> usize {
+    1000
 }
 
 impl Config {

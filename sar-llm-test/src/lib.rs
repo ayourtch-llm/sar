@@ -116,9 +116,13 @@ impl Actor for LlmTestActor {
                 result = out_rx.recv() => {
                     match result {
                         Ok(msg) => {
+                            let output = match &msg.payload {
+                                serde_json::Value::String(s) => s.replace("\\n", "\n"),
+                                _ => msg.payload.to_string(),
+                            };
                             info!(
                                 "LLM test actor {} received output from '{}': {}",
-                                self.index, msg.source, msg.payload
+                                self.index, msg.source, output
                             );
                         }
                         Err(RecvError::Lagged(n)) => {

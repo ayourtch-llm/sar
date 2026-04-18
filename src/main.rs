@@ -6,6 +6,7 @@ use std::sync::Arc;
 use clap::Parser;
 use sar_core::{Config, SarBus};
 use sar_llm::LlmActor;
+use sar_ui_hub::UiHubActor;
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::fmt::MakeWriter;
@@ -76,6 +77,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     bus.create_topic("llm:0:out", 1000).await;
     bus.create_topic("llm:0:stream", 1000).await;
     bus.create_topic("llm-test:0:in", 100).await;
+    bus.create_topic("ui:user", 1000).await;
+    bus.create_topic("ui:input", 100).await;
+
+    // Spawn UI hub actors
+    for hub_config in &config.ui_hubs {
+        let hub_actor = UiHubActor::new(hub_config.clone());
+        (*bus).spawn_actor(hub_actor).await?;
+    }
 
     // Setup tracing with bus layer
     let bus_layer = sar_tracing::BusLayer::new(
@@ -149,8 +158,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Spawn TUI actor (this blocks until the user quits)
     let tui_actor = sar_tui::TuiActor::new(
-        config.topics.log.clone(),
-        config.topics.input.clone(),
+        config.ui_hubs[0].user_topic.clone(),
+        config.ui_hubs[0].input_topic.clone(),
         config.ui.show_bottom_panel,
     );
     (*bus).spawn_actor(tui_actor).await?.wait().await?;

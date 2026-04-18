@@ -11,3 +11,11 @@ port = 3000
 
 [ui]
 show_bottom_panel = true
+
+[ui_hub.default]
+name = "default"
+user_topic = "ui:user"
+input_topic = "ui:input"
+buffer_size = 1000
+subscribe_to = ["sar:log", "sar:echo", "sar:reverse", "sar:llm:stream"]
+route_to = ["sar:llm-test:0:in"]
