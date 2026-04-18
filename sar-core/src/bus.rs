@@ -26,10 +26,21 @@ impl SarBus {
         info!("Created topic: {}", topic);
     }
 
+    async fn ensure_topic(&self, topic: &str, capacity: usize) {
+        let mut topics = self.topics.write().await;
+        if !topics.contains_key(topic) {
+            let (sender, _) = broadcast::channel::<Message>(capacity);
+            topics.insert(topic.to_string(), sender);
+            info!("Auto-created topic: {}", topic);
+        }
+    }
+
     pub async fn publish(&self, message: Message) -> Result<(), BusError> {
         let topic = message.topic.clone();
-        let topics = self.topics.read().await;
+        let capacity = 1000;
+        self.ensure_topic(&topic, capacity).await;
         
+        let topics = self.topics.read().await;
         match topics.get(&topic) {
             Some(sender) => {
                 if sender.send(message).is_err() {
@@ -45,6 +56,9 @@ impl SarBus {
     }
 
     pub async fn subscribe(&self, topic: &str) -> Result<broadcast::Receiver<Message>, BusError> {
+        let capacity = 1000;
+        self.ensure_topic(topic, capacity).await;
+        
         let topics = self.topics.read().await;
         match topics.get(topic) {
             Some(sender) => {

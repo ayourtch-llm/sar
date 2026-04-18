@@ -51,18 +51,22 @@ async fn test_bus_publish_and_subscribe() {
 }
 
 #[tokio::test]
-async fn test_bus_publish_to_unknown_topic() {
+async fn test_bus_publish_to_unknown_topic_auto_creates() {
     let bus = SarBus::new();
     let msg = Message::text("unknown:topic", "sender", "data");
     let result = bus.publish(msg).await;
-    assert!(result.is_err());
+    assert!(result.is_ok());
+    let topics = bus.list_topics().await;
+    assert!(topics.contains(&"unknown:topic".to_string()));
 }
 
 #[tokio::test]
-async fn test_bus_subscribe_to_unknown_topic() {
+async fn test_bus_subscribe_to_unknown_topic_auto_creates() {
     let bus = SarBus::new();
     let result = bus.subscribe("unknown:topic").await;
-    assert!(result.is_err());
+    assert!(result.is_ok());
+    let topics = bus.list_topics().await;
+    assert!(topics.contains(&"unknown:topic".to_string()));
 }
 
 #[tokio::test]

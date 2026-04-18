@@ -39,8 +39,10 @@ impl Actor for UiHubActor {
 
         for topic in &self.config.subscribe_to {
             let bus = bus.clone();
+            let hub_id = format!("sar-ui-hub-{}", self.config.name);
             let hub_name = self.config.name.clone();
             let topic_clone = topic.clone();
+            let user_topic = self.config.user_topic.clone();
             tokio::spawn(async move {
                 let mut rx = match bus.subscribe(&topic_clone).await {
                     Ok(rx) => rx,
@@ -54,7 +56,12 @@ impl Actor for UiHubActor {
                 loop {
                     match rx.recv().await {
                         Ok(msg) => {
-                            if let Err(e) = bus.publish(msg).await {
+                            if msg.source == hub_id {
+                                continue;
+                            }
+                            let mut forwarded = msg.clone();
+                            forwarded.topic = user_topic.clone();
+                            if let Err(e) = bus.publish(forwarded).await {
                                 error!("UI hub '{}' failed to publish to user topic: {}", hub_name, e);
                             }
                         }
