@@ -18,6 +18,7 @@ use tracing::{error, info, warn};
 
 const APP_ID: &str = "sar-tui";
 const LIGHT_GRAY: Color = Color::Rgb(211, 211, 211);
+const PAGE_SIZE: usize = 10;
 
 #[derive(Debug, Default)]
 pub struct TuiActor {
@@ -92,24 +93,28 @@ impl Actor for TuiActor {
         });
 
         loop {
+            let log_height = {
+                let s = state.lock().await;
+                s.visible_lines
+            };
+
             let snapshot = {
                 let s = state.lock().await;
-                RenderSnapshot::new(&s)
+                RenderSnapshot::new(&s, log_height)
             };
 
             terminal.draw(|frame| {
-                let chunks = layout_chunks(frame.area(), snapshot.show_bottom_panel);
+                let chunks = layout_chunks(frame.area(), false);
 
                 let log_paragraph = Paragraph::new(snapshot.log_text)
-                    .block(Block::default())
-                    .scroll((snapshot.scroll, 0));
+                    .block(Block::default());
                 frame.render_widget(log_paragraph, chunks[0]);
 
                 let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                     .begin_symbol(Some("↑"))
                     .end_symbol(Some("↓"));
-                let mut scrollbar_state = ScrollbarState::new(snapshot.total_lines)
-                    .position(snapshot.scroll as usize);
+                let mut scrollbar_state = ScrollbarState::new(snapshot.scrollable_range)
+                    .position(snapshot.scroll);
                 frame.render_stateful_widget(scrollbar, chunks[0], &mut scrollbar_state);
 
                 let status_paragraph = Paragraph::new(snapshot.status_text)
@@ -130,28 +135,26 @@ impl Actor for TuiActor {
                     chunks[2].x + 2 + snapshot.input_line.len() as u16,
                     chunks[2].y,
                 ));
-
-                if snapshot.show_bottom_panel {
-                    let info_text = Text::from(vec![
-                        Line::from(" Ready "),
-                        Line::from(""),
-                        Line::from(" SAR v0.1.0 "),
-                        Line::from(" Press /quit or Ctrl+C to quit "),
-                        Line::from(""),
-                    ]);
-                    let info_paragraph = Paragraph::new(info_text)
-                        .block(Block::default().style(Style::default().bg(LIGHT_GRAY)));
-                    frame.render_widget(info_paragraph, chunks[3]);
-                }
             })?;
 
             if crossterm::event::poll(Duration::from_millis(100))? {
                 let event = event::read()?;
                 let mut state = state.lock().await;
-                
+
                 match &event {
                     Event::Key(key) => {
                         match key.code {
+                            KeyCode::Char('[') if key.modifiers == KeyModifiers::CONTROL => {
+                                state.at_bottom = false;
+                                let scroll_amount = if state.scroll >= PAGE_SIZE { PAGE_SIZE } else { state.scroll };
+                                state.scroll -= scroll_amount;
+                            }
+                            KeyCode::Char(']') if key.modifiers == KeyModifiers::CONTROL => {
+                                let max_scroll = state.max_scroll(state.visible_lines);
+                                let scroll_amount = if max_scroll - state.scroll >= PAGE_SIZE { PAGE_SIZE } else { max_scroll.saturating_sub(state.scroll) };
+                                state.scroll += scroll_amount;
+                                state.at_bottom = state.scroll >= max_scroll;
+                            }
                             KeyCode::Char(c) => {
                                 if key.modifiers == KeyModifiers::NONE {
                                     let line_idx = state.active_line;
@@ -192,6 +195,14 @@ impl Actor for TuiActor {
                                         state.active_line = 0;
                                         continue;
                                     }
+                                    if input.trim() == "/bottom" {
+                                        state.at_bottom = true;
+                                        state.scroll = state.max_scroll(state.visible_lines);
+                                        state.input_lines.clear();
+                                        state.input_lines.push(String::new());
+                                        state.active_line = 0;
+                                        continue;
+                                    }
                                     if !input.is_empty() {
                                         let msg = Message::text(
                                             &state.current_target,
@@ -221,19 +232,23 @@ impl Actor for TuiActor {
                                 state.focus_input = !state.focus_input;
                             }
                             KeyCode::PageUp => {
-                                let scroll_amount = if state.scroll >= 10 { 10 } else { state.scroll };
+                                state.at_bottom = false;
+                                let scroll_amount = if state.scroll >= PAGE_SIZE { PAGE_SIZE } else { state.scroll };
                                 state.scroll -= scroll_amount;
                             }
                             KeyCode::PageDown => {
-                                let max_scroll = state.log_entries.len().saturating_sub(100);
-                                let scroll_amount = if max_scroll - state.scroll >= 10 { 10 } else { max_scroll.saturating_sub(state.scroll) };
+                                let max_scroll = state.max_scroll(state.visible_lines);
+                                let scroll_amount = if max_scroll - state.scroll >= PAGE_SIZE { PAGE_SIZE } else { max_scroll.saturating_sub(state.scroll) };
                                 state.scroll += scroll_amount;
+                                state.at_bottom = state.scroll >= max_scroll;
                             }
                             KeyCode::Home => {
+                                state.at_bottom = false;
                                 state.scroll = 0;
                             }
                             KeyCode::End => {
-                                state.scroll = state.log_entries.len().saturating_sub(100);
+                                state.at_bottom = true;
+                                state.scroll = state.max_scroll(state.visible_lines);
                             }
                             _ => {}
                         }
@@ -241,19 +256,21 @@ impl Actor for TuiActor {
                     Event::Mouse(mouse) => {
                         match mouse.kind {
                             MouseEventKind::ScrollUp => {
-                                if state.scroll >= 10 {
-                                    state.scroll -= 10;
+                                state.at_bottom = false;
+                                if state.scroll >= PAGE_SIZE {
+                                    state.scroll -= PAGE_SIZE;
                                 } else {
                                     state.scroll = 0;
                                 }
                             }
                             MouseEventKind::ScrollDown => {
-                                let max_scroll = state.log_entries.len().saturating_sub(100);
-                                if state.scroll + 10 <= max_scroll {
-                                    state.scroll += 10;
+                                let max_scroll = state.max_scroll(state.visible_lines);
+                                if state.scroll + PAGE_SIZE <= max_scroll {
+                                    state.scroll += PAGE_SIZE;
                                 } else {
                                     state.scroll = max_scroll;
                                 }
+                                state.at_bottom = state.scroll >= max_scroll;
                             }
                             _ => {}
                         }
@@ -274,16 +291,15 @@ impl Actor for TuiActor {
 }
 
 struct RenderSnapshot {
-    show_bottom_panel: bool,
     log_text: Text<'static>,
-    scroll: u16,
-    total_lines: usize,
+    scroll: usize,
+    scrollable_range: usize,
     input_line: String,
     status_text: Line<'static>,
 }
 
 impl RenderSnapshot {
-    fn new(state: &TuiState) -> Self {
+    fn new(state: &TuiState, log_height: usize) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
@@ -300,10 +316,9 @@ impl RenderSnapshot {
             pid()
         ));
         Self {
-            show_bottom_panel: state.show_bottom_panel,
-            log_text: state.render_log(),
-            scroll: state.scroll as u16,
-            total_lines: state.log_entries.len(),
+            log_text: state.render_log(log_height),
+            scroll: state.scroll,
+            scrollable_range: state.max_scroll(log_height),
             input_line: state.input_lines[state.active_line].clone(),
             status_text,
         }
@@ -338,6 +353,8 @@ fn layout_chunks(area: Rect, show_bottom: bool) -> [Rect; 4] {
 struct TuiState {
     log_entries: Vec<String>,
     scroll: usize,
+    at_bottom: bool,
+    visible_lines: usize,
     input_lines: Vec<String>,
     active_line: usize,
     focus_input: bool,
@@ -350,6 +367,8 @@ impl TuiState {
         Self {
             log_entries: Vec::new(),
             scroll: 0,
+            at_bottom: true,
+            visible_lines: 24,
             input_lines: vec![String::new()],
             active_line: 0,
             focus_input: true,
@@ -358,17 +377,30 @@ impl TuiState {
         }
     }
 
+    fn max_scroll(&self, visible_lines: usize) -> usize {
+        if self.log_entries.len() <= visible_lines {
+            0
+        } else {
+            self.log_entries.len() - visible_lines
+        }
+    }
+
     fn add_log_entry(&mut self, entry: String) {
         self.log_entries.push(entry);
         if self.log_entries.len() > 1000 {
             self.log_entries.drain(..100);
+            if self.at_bottom {
+                self.scroll = self.max_scroll(self.visible_lines);
+            }
+        } else if self.at_bottom {
+            self.scroll = self.max_scroll(self.visible_lines);
         }
-        self.scroll = self.log_entries.len().saturating_sub(100);
     }
 
-    fn render_log(&self) -> Text<'static> {
-        let start = self.scroll.min(self.log_entries.len());
-        let end = self.log_entries.len();
+    fn render_log(&self, visible_lines: usize) -> Text<'static> {
+        let max_scroll = self.max_scroll(visible_lines);
+        let start = self.scroll.min(max_scroll);
+        let end = (start + visible_lines).min(self.log_entries.len());
         let visible: Vec<Line<'static>> = self.log_entries[start..end]
             .iter()
             .map(|line| Line::from(line.clone()))
