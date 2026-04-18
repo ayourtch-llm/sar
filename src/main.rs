@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -5,6 +6,23 @@ use clap::Parser;
 use sar_core::{Config, SarBus};
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::fmt::MakeWriter;
+
+struct LogWriter {
+    enabled: bool,
+}
+
+impl<'a> MakeWriter<'a> for LogWriter {
+    type Writer = Box<dyn Write + Send + Sync>;
+    
+    fn make_writer(&self) -> Self::Writer {
+        if self.enabled {
+            Box::new(std::io::stderr())
+        } else {
+            Box::new(std::io::sink())
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "sar", about = "Simple Agent in Rust")]
@@ -16,6 +34,10 @@ struct Cli {
     /// Enable verbose logging
     #[arg(short, long, default_value = "false")]
     verbose: bool,
+
+    /// Enable console logging output
+    #[arg(long, default_value = "false")]
+    log: bool,
 }
 
 #[tokio::main]
@@ -51,9 +73,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tracing_subscriber::EnvFilter::new("info")
     };
     
+    let log_writer = LogWriter { enabled: cli.log };
+    
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
-        .with_writer(std::io::sink)
+        .with_writer(log_writer)
         .finish();
     
     let subscriber = subscriber.with(bus_layer);

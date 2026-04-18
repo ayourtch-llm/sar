@@ -1,0 +1,2 @@
+#!/bin/sh
+tttt mcp-server -c /tmp/tttt-mcp-$TTTT_PID.sock
