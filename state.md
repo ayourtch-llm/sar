@@ -497,6 +497,11 @@ cd sar-llm-test-loop-tools && cargo run
     - Uses Peer::list_all_tools() and Peer::call_tool() for tool operations
     - Handles rmcp's different types: Cow<'static, str> for names, Arc<JsonObject> for schemas
 26. Verified MCP server spawning works end-to-end: config → spawn → discover → add to loop
+27. Fixed two runtime bugs:
+    - MCP `RunningService` was dropped after tool discovery, killing transport before tool calls
+      → Stored `Arc<RunningService>` in `McpServerHandle` to keep connection alive
+    - LLM publishes individual tool call chunks (maps) AND final array to same topic
+      → Loop actor now skips map payloads, only processes array payloads
 25. Integrated MCP servers into sar binary:
     - Added McpServerConfig to sar-core config parsing
     - Added tool_actors() method to McpServerHandle for exposing tools to LLM
