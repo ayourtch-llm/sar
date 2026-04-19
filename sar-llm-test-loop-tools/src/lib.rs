@@ -582,12 +582,14 @@ impl Actor for LlmTestLoopToolsActor {
                                         messages.len()
                                     };
                                     info!(
-                                        "LLM test loop tools actor {} sending continue to LLM, message count: {}",
-                                        self.index, msg_count
+                                        "LLM test loop tools actor {} added continue to conversation, message count: {}, pending: {}",
+                                        self.index, msg_count, pending_tool_calls.len()
                                     );
 
-                                    if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
-                                        error!("Failed to send continue to LLM: {}", e);
+                                    if pending_tool_calls.is_empty() {
+                                        if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
+                                            error!("Failed to send continue to LLM: {}", e);
+                                        }
                                     }
                                     continue;
                                 }
