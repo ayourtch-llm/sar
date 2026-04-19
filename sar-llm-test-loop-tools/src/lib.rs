@@ -237,6 +237,7 @@ impl Actor for LlmTestLoopToolsActor {
         );
 
         let mut pending_tool_calls: HashSet<String> = HashSet::new();
+        let mut pending_messages: Vec<String> = Vec::new();
 
         loop {
             tokio::select! {
@@ -258,6 +259,15 @@ impl Actor for LlmTestLoopToolsActor {
                                 if let Err(e) = bus.publish(&self.id(), dump_msg).await {
                                     error!("Failed to publish dump: {}", e);
                                 }
+                                continue;
+                            }
+
+                            if !pending_tool_calls.is_empty() {
+                                info!(
+                                    "LLM test loop tools actor {} buffering user message while {} tool calls pending",
+                                    self.index, pending_tool_calls.len()
+                                );
+                                pending_messages.push(user_message);
                                 continue;
                             }
 
@@ -495,7 +505,30 @@ impl Actor for LlmTestLoopToolsActor {
                             pending_tool_calls.remove(&tool_result.tool_call_id);
 
                             if pending_tool_calls.is_empty() {
-                                info!("LLM test loop tools actor {} all tool calls resolved, sending conversation back to LLM, message count: {}", self.index, conversation_messages.lock().await.len());
+                                info!("LLM test loop tools actor {} all tool calls resolved, message count: {}", self.index, conversation_messages.lock().await.len());
+
+                                for buffered_msg in pending_messages.drain(..) {
+                                    {
+                                        let mut messages = conversation_messages.lock().await;
+                                        messages.push(serde_json::json!({
+                                            "role": "user",
+                                            "content": buffered_msg
+                                        }));
+                                    }
+                                    let buffered_count = {
+                                        let messages = conversation_messages.lock().await;
+                                        messages.len()
+                                    };
+                                    info!(
+                                        "LLM test loop tools actor {} processing buffered message, message count: {}",
+                                        self.index, buffered_count
+                                    );
+
+                                    if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
+                                        error!("Failed to send buffered message: {}", e);
+                                    }
+                                }
+
                                 if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
                                     error!("Failed to send tool results to LLM: {}", e);
                                 }
