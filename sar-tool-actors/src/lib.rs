@@ -136,6 +136,12 @@ impl ToolActorRunner {
         let control_topic = "user:control".to_string();
         let results_topic = "tool:results".to_string();
 
+        bus.register_announcement(sar_core::actor::ActorAnnouncement {
+            id: self.actor_id.clone(),
+            subscriptions: vec![execute_topic.clone()],
+            publications: vec![results_topic.clone()],
+        }).await;
+
         let mut execute_rx = bus.subscribe(&self.actor_id, &execute_topic).await?;
 
         let mut control_rx = if self.actor.supports_cancel() {
