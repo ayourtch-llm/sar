@@ -99,7 +99,8 @@ pub struct Message {
 
 ### Config (sar-core/src/config.rs)
 - Loaded from TOML file via `Config::from_file(&Path)`
-- Sections: `topics`, `server`, `ui`, `ui_hub` (for sar-ui-hub config)
+- Sections: `topics`, `server`, `ui`, `ui_hub` (for sar-ui-hub config), `mcp_servers` (for MCP server config)
+- `McpServerConfig` struct: `command` (Vec<String>), `default` (bool), `expose` (Vec<String>)
 - Default values defined in config.rs
 
 ## Components
@@ -313,6 +314,11 @@ input_topic = "ui:input"
 buffer_size = 1000
 subscribe_to = ["sar:log", "sar:echo", "sar:reverse", "llm-test:0:stream"]
 route_to = ["sar:llm-test:0:in"]
+
+[mcp_servers.<name>]
+command = ["/path/to/mcp-server-binary"]
+default = false  # auto-add tools to LLM loop
+expose = []      # tool names to expose without prefix (empty = all prefixed)
 ```
 
 ## Dependencies
@@ -433,6 +439,8 @@ cd sar-llm-test-loop-tools && cargo run
 ## Git State
 - Branch: main
 - Latest commits:
+  - `e6db6d8` - feat: integrate MCP servers into sar binary via config
+  - `c8fc710` - feat: add sar-tool-mcp crate for MCP server integration
   - `44544de` - fix: parse user:control as Value instead of ContinueMessage
   - `2ff9f6d` - refactor: remove unnecessary user:control subscription from loop actor
   - `f80fcc3` - fix: don't send to LLM from user:control branch while tools are pending
@@ -442,7 +450,7 @@ cd sar-llm-test-loop-tools && cargo run
   - `f3f99d1` - feat: fully-async tool execution model with independent tool actors
   - `f0a678b` - feat: add ToolActor trait for runtime tool management
   - `ab4c855` - initial commit with full project
-- Working tree: clean (changes not yet committed)
+- Working tree: clean
 
 ## What Was Built (Conversation History)
 1. User described the project vision
@@ -481,6 +489,13 @@ cd sar-llm-test-loop-tools && cargo run
     - Use ToMcpClientHandler::to_mcp_client_handler() instead of Box::new()
     - Clone Arc before calling start() (which consumes self)
     - Import async_trait for #[async_trait] on ToolActor impl
+25. Integrated MCP servers into sar binary:
+    - Added McpServerConfig to sar-core config parsing
+    - Added tool_actors() method to McpServerHandle for exposing tools to LLM
+    - Added add_tool_arc() to LlmTestLoopToolsActor for Arc<dyn ToolActor>
+    - Wired MCP servers from config.toml into main.rs (spawn, discover, add to loop, spawn runners)
+    - Added From impl for converting sar_core::config::McpServerConfig → sar_tool_mcp::McpServerConfig
+    - Added find_files MCP server to config.toml
 
 ## Key Technical Decisions
 - `tokio::sync::broadcast` channels for pub-sub (not mpsc, since multiple subscribers)
@@ -495,15 +510,15 @@ cd sar-llm-test-loop-tools && cargo run
 - **Centralized user:control**: Continue/interrupt signals sent to shared topic, tools subscribe individually
 - **HashSet for pending calls**: Tracks by tool_call_id to prevent overflow on overlapping batches
 - **Message buffering**: User messages buffered while tools are pending, processed in order after resolution
+- **Config-driven MCP servers**: MCP servers defined in config.toml, spawned at startup, tools discovered and exposed to LLM
 
 ## Potential Next Steps
-1. Integrate sar-tool-mcp into sar binary (config-driven MCP server spawning)
-2. Add tests for sar-tool-mcp (MCP server discovery, tool execution)
-3. Add more actors (e.g., file watcher, HTTP client, etc.)
-4. Add tests for sar-llm and sar-llm-test
-5. Improve TUI (add more widgets, colors, keybindings)
-6. Add persistence (save log to file)
-7. Add more server endpoints (WebSocket for real-time log streaming)
-8. Add actor lifecycle management (restart on failure, health checks)
-9. Add metrics/monitoring
-10. Support loading actors dynamically via config
+1. Add tests for sar-tool-mcp (MCP server discovery, tool execution)
+2. Add more actors (e.g., file watcher, HTTP client, etc.)
+3. Add tests for sar-llm and sar-llm-test
+4. Improve TUI (add more widgets, colors, keybindings)
+5. Add persistence (save log to file)
+6. Add more server endpoints (WebSocket for real-time log streaming)
+7. Add actor lifecycle management (restart on failure, health checks)
+8. Add metrics/monitoring
+9. Support loading actors dynamically via config
