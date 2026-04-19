@@ -28,7 +28,7 @@ subscribe_to = ["sar:echo", "sar:reverse", "llm-test-tools:0:stream", "llm:0:sta
 route_to = ["llm-test-tools:0:in"]
 
 [system_message]
-message = "You are a helpful assistant."
+message = "You are a helpful assistant. You are not overthinking things. You are professional and confident. All your changes will later be reviewed by Codex, so you do your best!"
 allow_edit = true
 
 [mcp_servers.find_files]

@@ -567,26 +567,21 @@ impl Actor for LlmTestLoopToolsActor {
                             if pending_tool_calls.is_empty() {
                                 info!("LLM test loop tools actor {} all tool calls resolved, message count: {}", self.index, conversation_messages.lock().await.len());
 
-                                for buffered_msg in pending_messages.drain(..) {
-                                    {
-                                        let mut messages = conversation_messages.lock().await;
-                                        messages.push(serde_json::json!({
-                                            "role": "user",
-                                            "content": buffered_msg
-                                        }));
-                                    }
-                                    let buffered_count = {
-                                        let messages = conversation_messages.lock().await;
-                                        messages.len()
-                                    };
-                                    info!(
-                                        "LLM test loop tools actor {} processing buffered message, message count: {}",
-                                        self.index, buffered_count
-                                    );
+                                // If there are pending messages, insert a fake assistant message first
+                                if !pending_messages.is_empty() {
+                                    let mut messages = conversation_messages.lock().await;
+                                    messages.push(serde_json::json!({
+                                        "role": "assistant",
+                                        "content": "notice there is a user input ?"
+                                    }));
 
-                                    if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
-                                        error!("Failed to send buffered message: {}", e);
-                                    }
+                                    // Bundle all pending messages into a single user message
+                                    let bundled_content = pending_messages.join("\n");
+                                    pending_messages.clear();
+                                    messages.push(serde_json::json!({
+                                        "role": "user",
+                                        "content": bundled_content
+                                    }));
                                 }
 
                                 if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
