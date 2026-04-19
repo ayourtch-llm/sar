@@ -102,9 +102,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Tool execution topics
     bus.create_topic("tool:results", 1000).await;
     bus.create_topic("tool:calculator:execute", 100).await;
-    bus.create_topic("tool:calculator:cancel", 100).await;
     bus.create_topic("tool:sleep:execute", 100).await;
-    bus.create_topic("tool:sleep:cancel", 100).await;
+    bus.create_topic("user:control", 100).await;
 
     // Spawn UI hub actors
     for (name, hub_config) in &config.ui_hubs {

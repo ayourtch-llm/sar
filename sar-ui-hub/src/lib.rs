@@ -5,6 +5,13 @@ use sar_core::config::UiHubConfig;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
+const USER_CONTROL_TOPIC: &str = "user:control";
+const CONTINUE_PREFIX: &str = "/continue ";
+
+fn is_continue_message(input: &str) -> Option<String> {
+    input.strip_prefix(CONTINUE_PREFIX).map(|s| s.to_string())
+}
+
 #[derive(Debug, Default)]
 pub struct UiHubActor {
     config: UiHubConfig,
@@ -121,6 +128,28 @@ impl Actor for UiHubActor {
         loop {
             match input_rx.recv().await {
                 Ok(msg) => {
+                    let payload_str = match &msg.payload {
+                        serde_json::Value::String(s) => s.clone(),
+                        _ => msg.payload.to_string(),
+                    };
+
+                    if let Some(reason) = is_continue_message(&payload_str) {
+                        let control_msg = Message::new(
+                            USER_CONTROL_TOPIC,
+                            &hub_id,
+                            serde_json::json!({
+                                "type": "continue",
+                                "reason": reason,
+                            }),
+                        ).with_type("Continue");
+                        if let Err(e) = bus.publish(&hub_id, control_msg).await {
+                            error!("UI hub '{}' failed to publish continue to '{}': {}", self.config.name, USER_CONTROL_TOPIC, e);
+                        } else {
+                            info!("UI hub '{}' published continue to '{}': reason='{}'", self.config.name, USER_CONTROL_TOPIC, reason);
+                        }
+                        continue;
+                    }
+
                     for route_topic in &self.config.route_to {
                         let routed_msg = Message::new(
                             route_topic,

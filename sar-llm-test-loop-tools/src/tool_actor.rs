@@ -61,6 +61,15 @@ pub struct ToolCancelMessage {
     pub tool_call_id: String,
 }
 
+/// Message published by the UI hub when the user sends `/continue <reason>`.
+/// Tools that support interrupt-by-continue subscribe to `user:control` and
+/// cancel their current execution if the `tool_name` matches.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContinueMessage {
+    pub tool_name: String,
+    pub reason: String,
+}
+
 /// Trait for actors that expose tool capabilities.
 ///
 /// This trait is object-safe (dyn compatible), allowing tools to be stored
@@ -79,10 +88,11 @@ pub trait ToolActor: Send + Sync {
 /// Runner for a ToolActor — subscribes to bus topics and dispatches tool calls.
 ///
 /// Each tool runs as an independent actor task, subscribed to its own `execute`
-/// and (optionally) `cancel` topics. Results are published to a single `tool:results` topic.
+/// topic and the shared `user:control` topic for continue/cancel signals.
+/// Results are published to a single `tool:results` topic.
 ///
 /// For tools that support cancellation, the execution is spawned as a separate tokio task
-/// and can be aborted when a cancel signal is received.
+/// and can be aborted when a matching ContinueMessage is received on `user:control`.
 pub struct ToolActorRunner {
     actor: std::sync::Arc<dyn ToolActor>,
     tool_name: String,
@@ -130,13 +140,13 @@ impl ToolActorRunner {
         bus: &sar_core::bus::SarBus,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let execute_topic = format!("tool:{}:execute", self.tool_name);
-        let cancel_topic = format!("tool:{}:cancel", self.tool_name);
+        let control_topic = "user:control".to_string();
         let results_topic = "tool:results".to_string();
 
         let mut execute_rx = bus.subscribe("tool-actor", &execute_topic).await?;
 
-        let mut cancel_rx = if self.actor.supports_cancel() {
-            Some(bus.subscribe("tool-actor", &cancel_topic).await?)
+        let mut control_rx = if self.actor.supports_cancel() {
+            Some(bus.subscribe("tool-actor", &control_topic).await?)
         } else {
             None
         };
@@ -170,7 +180,7 @@ impl ToolActorRunner {
                         actor.execute_tool(&args).await
                     });
 
-                    if let Some(ref mut cancel_rx) = cancel_rx {
+                    if let Some(ref mut control_rx) = control_rx {
                         let abort_handle = exec_handle.abort_handle();
                         tokio::select! {
                             result = exec_handle => {
@@ -188,10 +198,22 @@ impl ToolActorRunner {
                                     }
                                 }
                             }
-                            _ = cancel_rx.recv() => {
-                                abort_handle.abort();
-                                info!("Tool '{}' cancelled", self.tool_name);
-                                self.publish_result(bus, &results_topic, &call_id, false, String::new(), Some("Cancelled".to_string())).await;
+                            control_msg = control_rx.recv() => {
+                                match control_msg {
+                                    Ok(msg) => {
+                                        match serde_json::from_value::<ContinueMessage>(msg.payload) {
+                                            Ok(continue_msg) if continue_msg.tool_name == self.tool_name => {
+                                                abort_handle.abort();
+                                                info!("Tool '{}' cancelled: {}", self.tool_name, continue_msg.reason);
+                                                self.publish_result(bus, &results_topic, &call_id, false, String::new(), Some(format!("Cancelled: {}", continue_msg.reason))).await;
+                                            }
+                                            Ok(_) => {}
+                                            Err(_) => {}
+                                        }
+                                    }
+                                    Err(RecvError::Lagged(_)) => {}
+                                    Err(RecvError::Closed) => break,
+                                }
                             }
                         }
                     } else {

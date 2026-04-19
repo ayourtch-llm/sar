@@ -18,7 +18,7 @@ pub mod sleep_tool;
 pub use sleep_tool::SleepTool;
 
 pub mod tool_actor;
-pub use tool_actor::{ToolActor, ToolActorRunner, ToolExecuteMessage, ToolSyntax};
+pub use tool_actor::{ToolActor, ToolActorRunner, ToolExecuteMessage, ToolSyntax, ContinueMessage};
 
 pub mod tool_actor_wrapper;
 pub use tool_actor_wrapper::ToolActorWrapper;
@@ -220,6 +220,10 @@ impl Actor for LlmTestLoopToolsActor {
 
         let mut tool_results_rx = bus.subscribe(&self.id(), TOOLS_RESULTS_TOPIC).await.map_err(|e| {
             format!("Failed to subscribe to tool results topic '{}': {}", TOOLS_RESULTS_TOPIC, e)
+        })?;
+
+        let mut user_control_rx = bus.subscribe(&self.id(), "user:control").await.map_err(|e| {
+            format!("Failed to subscribe to user control topic: {}", e)
         })?;
 
         let tool_defs: Vec<serde_json::Value> = {
@@ -542,6 +546,61 @@ impl Actor for LlmTestLoopToolsActor {
                         }
                         Err(RecvError::Closed) => {
                             warn!("LLM test loop tools actor {} tool results topic closed", self.index);
+                        }
+                    }
+                }
+                result = user_control_rx.recv() => {
+                    match result {
+                        Ok(msg) => {
+                            if let Ok(continue_msg) = serde_json::from_value::<serde_json::Value>(msg.payload.clone()) {
+                                if continue_msg.get("type").and_then(|t| t.as_str()) == Some("continue") {
+                                    let reason = continue_msg.get("reason").and_then(|r| r.as_str()).unwrap_or("");
+                                    info!(
+                                        "LLM test loop tools actor {} received continue: reason='{}'",
+                                        self.index, reason
+                                    );
+
+                                    if !pending_tool_calls.is_empty() {
+                                        info!(
+                                            "LLM test loop tools actor {} cancelling {} pending tool calls",
+                                            self.index, pending_tool_calls.len()
+                                        );
+                                        pending_tool_calls.clear();
+                                        pending_messages.clear();
+                                    }
+
+                                    let user_message = format!("/continue {}", reason);
+                                    {
+                                        let mut messages = conversation_messages.lock().await;
+                                        messages.push(serde_json::json!({
+                                            "role": "user",
+                                            "content": user_message
+                                        }));
+                                    }
+                                    let msg_count = {
+                                        let messages = conversation_messages.lock().await;
+                                        messages.len()
+                                    };
+                                    info!(
+                                        "LLM test loop tools actor {} sending continue to LLM, message count: {}",
+                                        self.index, msg_count
+                                    );
+
+                                    if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
+                                        error!("Failed to send continue to LLM: {}", e);
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(RecvError::Lagged(n)) => {
+                            warn!(
+                                "LLM test loop tools actor {} lagged behind on user control, dropped {} messages",
+                                self.index, n
+                            );
+                        }
+                        Err(RecvError::Closed) => {
+                            info!("LLM test loop tools actor {} user control topic closed", self.index);
                         }
                     }
                 }
