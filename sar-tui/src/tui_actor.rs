@@ -840,19 +840,7 @@ impl TuiState {
     }
 
     fn finalize_tool_call(&mut self) {
-        if let Some(active_id) = &self.tool_call_item_id {
-            if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
-                item.text.push('\n');
-                item.height = item.text.matches('\n').count() + 1;
-            }
-        }
         self.tool_call_item_id = None;
-        if let Some(active_id) = &self.tool_result_item_id {
-            if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
-                item.text.push('\n');
-                item.height = item.text.matches('\n').count() + 1;
-            }
-        }
         self.tool_result_item_id = None;
         if self.at_bottom {
             self.scroll = self.max_scroll(self.visible_lines);
@@ -881,12 +869,6 @@ impl TuiState {
     }
 
     fn finalize_stream(&mut self) {
-        if let Some(active_id) = &self.streaming_item_id {
-            if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
-                item.text.push('\n');
-                item.height = item.text.matches('\n').count() + 1;
-            }
-        }
         self.streaming_item_id = None;
         self.finalize_tool_call();
         if self.at_bottom {
