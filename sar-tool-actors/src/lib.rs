@@ -87,6 +87,7 @@ pub trait ToolActor: Send + Sync {
 pub struct ToolActorRunner {
     actor: std::sync::Arc<dyn ToolActor>,
     tool_name: String,
+    actor_id: String,
 }
 
 impl ToolActorRunner {
@@ -94,7 +95,8 @@ impl ToolActorRunner {
         let name = actor.tool_syntax().name.clone();
         Self {
             actor: std::sync::Arc::new(actor),
-            tool_name: name,
+            tool_name: name.clone(),
+            actor_id: format!("tool-{}", name),
         }
     }
 
@@ -117,11 +119,11 @@ impl ToolActorRunner {
 
         let msg = sar_core::message::Message::new(
             results_topic,
-            "tool-actor",
+            &self.actor_id,
             serde_json::to_value(&result_msg).unwrap(),
         );
 
-        if let Err(e) = bus.publish("tool-actor", msg).await {
+        if let Err(e) = bus.publish(&self.actor_id, msg).await {
             error!("Failed to publish tool result for '{}': {}", self.tool_name, e);
         }
     }
@@ -134,10 +136,10 @@ impl ToolActorRunner {
         let control_topic = "user:control".to_string();
         let results_topic = "tool:results".to_string();
 
-        let mut execute_rx = bus.subscribe("tool-actor", &execute_topic).await?;
+        let mut execute_rx = bus.subscribe(&self.actor_id, &execute_topic).await?;
 
         let mut control_rx = if self.actor.supports_cancel() {
-            Some(bus.subscribe("tool-actor", &control_topic).await?)
+            Some(bus.subscribe(&self.actor_id, &control_topic).await?)
         } else {
             None
         };
