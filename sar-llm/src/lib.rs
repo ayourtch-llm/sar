@@ -33,11 +33,12 @@ pub struct LlmActor {
     pub stream_topic: String,
     pub stats_topic: String,
     pub tool_calls_topic: String,
+    pub control_topic: String,
     pub config: LlmConfig,
 }
 
 impl LlmActor {
-    pub fn new(index: usize, input_topic: String, output_topic: String, stream_topic: String, stats_topic: String, tool_calls_topic: String, config: LlmConfig) -> Self {
+    pub fn new(index: usize, input_topic: String, output_topic: String, stream_topic: String, stats_topic: String, tool_calls_topic: String, control_topic: String, config: LlmConfig) -> Self {
         Self {
             index,
             input_topic,
@@ -45,6 +46,7 @@ impl LlmActor {
             stream_topic,
             stats_topic,
             tool_calls_topic,
+            control_topic,
             config,
         }
     }
@@ -267,7 +269,7 @@ impl Actor for LlmActor {
     fn announce(&self) -> sar_core::actor::ActorAnnouncement {
         sar_core::actor::ActorAnnouncement {
             id: self.id(),
-            subscriptions: vec![self.input_topic.clone()],
+            subscriptions: vec![self.input_topic.clone(), self.control_topic.clone()],
             publications: vec![
                 self.output_topic.clone(),
                 self.stream_topic.clone(),
@@ -278,83 +280,218 @@ impl Actor for LlmActor {
     }
 
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("[llm{}] Subscribing to input topic: '{}'", self.index, self.input_topic);
         let mut rx = bus.subscribe(&self.id(), &self.input_topic).await.map_err(|e| {
             format!("Failed to subscribe to input topic '{}': {}", self.input_topic, e)
         })?;
 
-        info!("LLM actor {} listening on '{}'", self.index, self.input_topic);
+        info!("[llm{}] Subscribing to control topic: '{}'", self.index, self.control_topic);
+        let mut control_rx = bus.subscribe(&self.id(), &self.control_topic).await.map_err(|e| {
+            format!("Failed to subscribe to control topic '{}': {}", self.control_topic, e)
+        })?;
+
+        info!("[llm{}] Listening on input='{}' control='{}'", self.index, self.input_topic, self.control_topic);
+
+        let mut active_request: Option<tokio::task::JoinHandle<Result<(String, Vec<serde_json::Value>), Box<dyn std::error::Error + Send + Sync>>>> = None;
 
         loop {
-            match rx.recv().await {
-                Ok(msg) => {
-                    info!("LLM actor {} received request from '{}'", self.index, msg.source);
-                    
-                    let request: LlmRequest = match serde_json::from_value(msg.payload.clone()) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            error!("Failed to parse LLM request: {}", e);
-                            continue;
+            if let Some(req_handle) = active_request.take() {
+                let abort_handle = req_handle.abort_handle();
+                let mut req_handle_opt = Some(req_handle);
+                // We have an active request — select between control and request completion
+                loop {
+                    let control_msg = tokio::select! {
+                        control_msg = control_rx.recv() => {
+                            info!("[llm{}] Control branch ready (with active request)", self.index);
+                            control_msg
+                        }
+                        request_result = async {
+                            if let Some(handle) = req_handle_opt.take() {
+                                handle.await
+                            } else {
+                                std::future::pending().await
+                            }
+                        } => {
+                            info!("[llm{}] Request task completed", self.index);
+                            match request_result {
+                                Ok(Ok((full_response, tool_calls))) => {
+                                    info!("[llm{}] Request succeeded, tool_calls={}", self.index, tool_calls.len());
+                                    if !tool_calls.is_empty() {
+                                        let tc_msg = Message::new(
+                                            &self.tool_calls_topic,
+                                            &self.id(),
+                                            serde_json::to_value(&tool_calls).unwrap(),
+                                        ).with_type("LlmToolCalls");
+                                        if let Err(e) = bus.publish(&self.id(), tc_msg).await {
+                                            error!("[llm{}] Failed to publish tool calls: {}", self.index, e);
+                                        }
+                                    } else {
+                                        let out_msg = Message::new(
+                                            &self.output_topic,
+                                            &self.id(),
+                                            full_response,
+                                        );
+                                        if let Err(e) = bus.publish(&self.id(), out_msg).await {
+                                            error!("[llm{}] Failed to publish LLM response: {}", self.index, e);
+                                        }
+                                    }
+                                }
+                                Ok(Err(e)) => {
+                                    error!("[llm{}] Request failed: {}", self.index, e);
+                                    let error_msg = Message::new(
+                                        &self.output_topic,
+                                        &self.id(),
+                                        format!("Error: {}", e),
+                                    );
+                                    if let Err(e) = bus.publish(&self.id(), error_msg).await {
+                                        error!("[llm{}] Failed to publish error message: {}", self.index, e);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("[llm{}] Request task was aborted: {}", self.index, e);
+                                }
+                            }
+                            break;
                         }
                     };
 
-                    let config = self.merge_config(request.config);
-                    
-                    let messages_vec: Vec<serde_json::Value> = if let Some(ref messages) = request.messages {
-                        messages.clone()
-                    } else {
-                        vec![serde_json::json!({"role": "user", "content": request.prompt})]
-                    };
-                    info!("LLM actor {} sending {} messages to API", self.index, messages_vec.len());
-                    let tools = request.tools.as_deref();
-                    let result = self.send_request(&config, &messages_vec, tools, bus).await;
-                    
-                    match result {
-                        Ok((full_response, tool_calls)) => {
-                            info!("LLM actor {} completed request, tool_calls count: {}", self.index, tool_calls.len());
-                            
-                            if !tool_calls.is_empty() {
-                                let tc_msg = Message::new(
-                                    &self.tool_calls_topic,
-                                    &self.id(),
-                                    serde_json::to_value(&tool_calls).unwrap(),
-                                ).with_type("LlmToolCalls");
-                                if let Err(e) = bus.publish(&self.id(), tc_msg).await {
-                                    error!("Failed to publish tool calls: {}", e);
-                                }
-                            } else {
-                                let out_msg = Message::new(
-                                    &self.output_topic,
-                                    &self.id(),
-                                    full_response,
-                                );
-                                if let Err(e) = bus.publish(&self.id(), out_msg).await {
-                                    error!("Failed to publish LLM response: {}", e);
+                    match control_msg {
+                        Ok(msg) => {
+                            info!("[llm{}] Received control message, payload={:?}", self.index, msg.payload);
+                            if let Ok(v) = serde_json::from_value::<serde_json::Value>(msg.payload) {
+                                if let Some(type_str) = v.get("type").and_then(|t| t.as_str()) {
+                                    info!("[llm{}] Control message type='{}'", self.index, type_str);
+                                    if type_str == "interrupt" {
+                                        let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("interrupted");
+                                        info!("[llm{}] Processing interrupt, reason='{}'", self.index, reason);
+                                        info!("[llm{}] Aborting active request handle", self.index);
+                                        abort_handle.abort();
+                                        if let Some(handle) = req_handle_opt.take() {
+                                            info!("[llm{}] Waiting for aborted request to finish", self.index);
+                                            match handle.await {
+                                                Ok(Err(e)) => info!("[llm{}] Aborted request returned error: {}", self.index, e),
+                                                Ok(Ok(_)) => info!("[llm{}] Aborted request finished normally (was already done)", self.index),
+                                                Err(e) => info!("[llm{}] Aborted request task was cancelled: {}", self.index, e),
+                                            }
+                                            info!("[llm{}] Request handle fully resolved", self.index);
+                                        }
+                                        info!("[llm{}] Returning interrupt error", self.index);
+                                        return Err(format!("Interrupted: {}", reason).into());
+                                    }
                                 }
                             }
                         }
-                        Err(e) => {
-                            error!("LLM actor {} request failed: {}", self.index, e);
-                            let error_msg = Message::new(
-                                &self.output_topic,
-                                &self.id(),
-                                format!("Error: {}", e),
-                            );
-                            if let Err(e) = bus.publish(&self.id(), error_msg).await {
-                                error!("Failed to publish error message: {}", e);
+                        Err(RecvError::Lagged(n)) => {
+                            warn!("[llm{}] Control lagged, dropped {} messages", self.index, n);
+                        }
+                        Err(RecvError::Closed) => {
+                            info!("[llm{}] Control topic closed", self.index);
+                            info!("[llm{}] Aborting active request due to control close", self.index);
+                            abort_handle.abort();
+                            if let Some(handle) = req_handle_opt.take() {
+                                let _ = handle.await;
+                            }
+                            break;
+                        }
+                    }
+                    // Put request back for next select! iteration
+                    if let Some(handle) = req_handle_opt.take() {
+                        active_request = Some(handle);
+                    }
+                    break;
+                }
+            } else {
+                // No active request — select between input and control
+                tokio::select! {
+                    result = rx.recv() => {
+                        info!("[llm{}] Input branch ready (no active request)", self.index);
+
+                        match result {
+                            Ok(msg) => {
+                                info!("[llm{}] Received request from '{}'", self.index, msg.source);
+
+                                let request: LlmRequest = match serde_json::from_value(msg.payload.clone()) {
+                                    Ok(r) => r,
+                                    Err(e) => {
+                                        error!("[llm{}] Failed to parse LLM request: {}", self.index, e);
+                                        continue;
+                                    }
+                                };
+
+                                let config = self.merge_config(request.config);
+
+                                let messages_vec: Vec<serde_json::Value> = if let Some(ref messages) = request.messages {
+                                    messages.clone()
+                                } else {
+                                    vec![serde_json::json!({"role": "user", "content": request.prompt})]
+                                };
+                                info!("[llm{}] Preparing to send {} messages to API", self.index, messages_vec.len());
+                                let tools_vec = request.tools.clone();
+                                let bus_clone = bus.clone();
+                                let stream_topic = self.stream_topic.clone();
+                                let stats_topic = self.stats_topic.clone();
+                                let tool_calls_topic = self.tool_calls_topic.clone();
+                                let index = self.index;
+                                let config_merged = config.clone();
+                                let messages_clone = messages_vec.clone();
+
+                                active_request = Some(tokio::spawn(async move {
+                                    info!("[llm{}] Request task spawned, starting send_request", index);
+                                    let llm = LlmActor {
+                                        index,
+                                        input_topic: String::new(),
+                                        output_topic: String::new(),
+                                        stream_topic,
+                                        stats_topic,
+                                        tool_calls_topic,
+                                        control_topic: String::new(),
+                                        config: config_merged,
+                                    };
+                                    let tools = tools_vec.as_deref();
+                                    llm.send_request(&llm.config, &messages_clone, tools, &bus_clone).await
+                                }));
+                            }
+                            Err(RecvError::Lagged(n)) => {
+                                warn!("[llm{}] Input lagged, dropped {} messages", self.index, n);
+                            }
+                            Err(RecvError::Closed) => {
+                                info!("[llm{}] Input topic closed", self.index);
+                                break;
+                            }
+                        }
+                    }
+                    control_msg = control_rx.recv() => {
+                        info!("[llm{}] Control branch ready (no active request)", self.index);
+                        match control_msg {
+                            Ok(msg) => {
+                                info!("[llm{}] Received control message, payload={:?}", self.index, msg.payload);
+                                if let Ok(v) = serde_json::from_value::<serde_json::Value>(msg.payload) {
+                                    if let Some(type_str) = v.get("type").and_then(|t| t.as_str()) {
+                                        info!("[llm{}] Control message type='{}'", self.index, type_str);
+                                        if type_str == "interrupt" {
+                                            let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("interrupted");
+                                            info!("[llm{}] Processing interrupt, reason='{}'", self.index, reason);
+                                            info!("[llm{}] No active request to abort", self.index);
+                                            info!("[llm{}] Returning interrupt error", self.index);
+                                            return Err(format!("Interrupted: {}", reason).into());
+                                        }
+                                    }
+                                }
+                            }
+                            Err(RecvError::Lagged(n)) => {
+                                warn!("[llm{}] Control lagged, dropped {} messages", self.index, n);
+                            }
+                            Err(RecvError::Closed) => {
+                                info!("[llm{}] Control topic closed", self.index);
+                                break;
                             }
                         }
                     }
                 }
-                Err(RecvError::Lagged(n)) => {
-                    warn!("LLM actor {} lagged behind, dropped {} messages", self.index, n);
-                }
-                Err(RecvError::Closed) => {
-                    info!("LLM actor {} input topic closed", self.index);
-                    break;
-                }
             }
         }
 
+        info!("[llm{}] Actor run loop exited", self.index);
         Ok(())
     }
 }

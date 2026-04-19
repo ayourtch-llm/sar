@@ -28,15 +28,17 @@ pub struct TuiActor {
     input_topic: String,
     bottom_panel_topic: String,
     show_bottom_panel: bool,
+    interrupt_tx: Option<tokio::sync::mpsc::Sender<&'static str>>,
 }
 
 impl TuiActor {
-    pub fn new(user_topic: String, input_topic: String, bottom_panel_topic: String, show_bottom_panel: bool) -> Self {
+    pub fn new(user_topic: String, input_topic: String, bottom_panel_topic: String, show_bottom_panel: bool, interrupt_tx: tokio::sync::mpsc::Sender<&'static str>) -> Self {
         Self {
             user_topic,
             input_topic,
             bottom_panel_topic,
             show_bottom_panel,
+            interrupt_tx: Some(interrupt_tx),
         }
     }
 }
@@ -286,7 +288,14 @@ impl Actor for TuiActor {
                                 state.at_bottom = state.scroll >= max_scroll;
                             }
                             KeyCode::Char(c) => {
-                                if key.modifiers == KeyModifiers::NONE {
+                                if key.modifiers == KeyModifiers::CONTROL && c == 'c' {
+                                    tracing::info!("[tui] Ctrl+C detected, forwarding to interrupt handler");
+                                    if let Some(ref tx) = self.interrupt_tx {
+                                        if let Err(e) = tx.send("first").await {
+                                            tracing::error!("[tui] Failed to send interrupt signal: {}", e);
+                                        }
+                                    }
+                                } else if key.modifiers == KeyModifiers::NONE {
                                     let line_idx = state.active_line;
                                     state.input_lines[line_idx].push(c);
                                 }

@@ -165,6 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "llm:0:stream".to_string(),
         "llm:0:stats".to_string(),
         "llm:0:tool_calls".to_string(),
+        "user:control".to_string(),
         config.llm.clone(),
     );
     (*bus).spawn_actor(llm_actor).await?;
@@ -265,13 +266,97 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Spawn TUI actor (this blocks until the user quits)
     let first_hub = config.ui_hubs.values().next()
         .ok_or("No UI hub configured")?;
+    let (interrupt_tx, mut interrupt_rx) = tokio::sync::mpsc::channel::<&'static str>(1);
+    
+    let bus_for_interrupt = bus.clone();
+    let first_hub_for_hint = first_hub.clone();
+    
+    bus_for_interrupt.register_announcement(sar_core::actor::ActorAnnouncement {
+        id: "sar-interrupt".to_string(),
+        subscriptions: Vec::new(),
+        publications: vec!["user:control".to_string(), first_hub.user_topic.clone()],
+    }).await;
+    
     let tui_actor = sar_tui::TuiActor::new(
         first_hub.user_topic.clone(),
         first_hub.input_topic.clone(),
         config.topics.log.clone(),
         config.ui.show_bottom_panel,
+        interrupt_tx,
     );
-    (*bus).spawn_actor(tui_actor).await?.wait().await?;
+    let handle = (*bus).spawn_actor(tui_actor).await?;
+
+    tokio::spawn(async move {
+        let mut first_press = std::time::Instant::now();
+        
+        loop {
+            match interrupt_rx.recv().await {
+                Some("first") => {
+                    tracing::info!("[interrupt] First Ctrl+C detected");
+                    
+                    let hint_msg = sar_core::message::Message::new(
+                        &first_hub_for_hint.user_topic,
+                        "sar-interrupt",
+                        "Ctrl+C detected. Press Ctrl+C again within 2 seconds to interrupt LLM.",
+                    ).with_type("Info");
+                    if let Err(e) = bus_for_interrupt.publish("sar-interrupt", hint_msg).await {
+                        tracing::error!("Failed to publish hint to TUI: {}", e);
+                    }
+                    
+                    first_press = std::time::Instant::now();
+                    
+                    // Wait for second Ctrl-C or timeout
+                    match tokio::time::timeout(std::time::Duration::from_secs(2), interrupt_rx.recv()).await {
+                        Ok(Some(_)) => {
+                            let elapsed = first_press.elapsed();
+                            tracing::info!("[interrupt] Second Ctrl+C detected, elapsed={:?}ms", elapsed.as_millis());
+                            if elapsed.as_millis() < 2000 {
+                                tracing::info!("[interrupt] Publishing interrupt to user:control");
+                                let interrupt_msg = sar_core::message::Message::new(
+                                    "user:control",
+                                    "sar-interrupt",
+                                    serde_json::json!({
+                                        "type": "interrupt",
+                                        "reason": "User sent double Ctrl+C",
+                                    }),
+                                ).with_type("Interrupt");
+                                if let Err(e) = bus_for_interrupt.publish("sar-interrupt", interrupt_msg).await {
+                                    tracing::error!("Failed to publish interrupt to user:control: {}", e);
+                                } else {
+                                    let done_msg = sar_core::message::Message::new(
+                                        &first_hub_for_hint.user_topic,
+                                        "sar-interrupt",
+                                        "Interrupt sent to LLM actor.",
+                                    ).with_type("Info");
+                                    if let Err(e) = bus_for_interrupt.publish("sar-interrupt", done_msg).await {
+                                        tracing::error!("Failed to publish interrupt confirmation: {}", e);
+                                    }
+                                }
+                            } else {
+                                tracing::info!("[interrupt] Second Ctrl+C too late (>2s), ignoring");
+                            }
+                        }
+                        Ok(None) => {
+                            tracing::info!("[interrupt] Interrupt channel closed");
+                            break;
+                        }
+                        Err(_) => {
+                            tracing::info!("[interrupt] Timeout waiting for second Ctrl+C");
+                        }
+                    }
+                }
+                Some(_) => {
+                    tracing::warn!("[interrupt] Unknown interrupt signal");
+                }
+                None => {
+                    tracing::info!("[interrupt] Interrupt channel closed");
+                    break;
+                }
+            }
+        }
+    });
+
+    handle.wait().await?;
 
     info!("SAR shutting down");
     Ok(())
