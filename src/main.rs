@@ -9,6 +9,7 @@ use sar_llm::LlmActor;
 use sar_llm_test_loop::LlmTestLoopActor;
 use sar_llm_test_loop_tools::LlmTestLoopToolsActor;
 use sar_llm_test_loop_tools::calculator::CalculatorTool;
+use sar_llm_test_loop_tools::ToolActorWrapper;
 use sar_ui_hub::UiHubActor;
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
@@ -187,7 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "llm:0:tool_calls".to_string(),
         "llm-test-tools:0:stream".to_string(),
     )
-    .with_tool(CalculatorTool::new());
+    .with_tool(ToolActorWrapper::new(CalculatorTool::new()));
     (*bus).spawn_actor(llm_test_tools_actor).await?;
 
     // Spawn server (detached - runs in background)
