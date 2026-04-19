@@ -115,23 +115,22 @@ impl Actor for TuiActor {
                         } else if meta_type == "LlmToolCall" {
                             state.thinking_item_id = None;
                             state.streaming_item_id = None;
-                            state.add_tool_call_chunk(display, "  [tool_call] ");
+                            state.add_tool_call_chunk(display);
                         } else if meta_type == "LlmToolResult" {
                             state.thinking_item_id = None;
                             state.streaming_item_id = None;
-                            state.add_tool_result_chunk(display, "  [tool_result] ");
+                            state.add_tool_result_chunk(display);
                         } else if meta_type == "LlmDump" {
                             state.thinking_item_id = None;
                             state.streaming_item_id = None;
                             state.add_dump_entry(display);
                         } else {
                             state.thinking_item_id = None;
-                            let text = if meta_type == "UserInput" {
-                                format!("> {}", display)
+                            if meta_type == "UserInput" {
+                                state.add_user_input(format!("> {}", display));
                             } else {
-                                format!("[{}] {}", msg.source, display)
-                            };
-                            state.add_log_entry(text);
+                                state.add_log_entry(format!("[{}] {}", msg.source, display));
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -568,12 +567,24 @@ fn layout_chunks(area: Rect, show_bottom: bool) -> [Rect; 4] {
     [chunks[0], chunks[1], chunks[2], chunks[3]]
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogEntryType {
+    Log,
+    Stream,
+    Thinking,
+    ToolCall,
+    ToolResult,
+    Dump,
+    UserInput,
+    Bottom,
+}
+
 #[derive(Debug, Clone)]
 struct LogItem {
     item_id: String,
     text: String,
     height: usize,
-    is_dump: bool,
+    entry_type: LogEntryType,
 }
 
 struct TuiState {
@@ -609,7 +620,7 @@ impl TuiState {
                     item_id,
                     text: line.to_string(),
                     height,
-                    is_dump: false,
+                    entry_type: LogEntryType::Bottom,
                 });
             }
         }
@@ -651,7 +662,24 @@ impl TuiState {
             item_id,
             text: entry,
             height,
-            is_dump: false,
+            entry_type: LogEntryType::Log,
+        });
+        if self.log_items.len() > 1000 {
+            self.log_items.drain(..100);
+        }
+        if self.at_bottom {
+            self.scroll = self.max_scroll(self.visible_lines);
+        }
+    }
+
+    fn add_user_input(&mut self, entry: String) {
+        let item_id = uuid::Uuid::new_v4().to_string();
+        let height = entry.matches('\n').count() + 1;
+        self.log_items.push(LogItem {
+            item_id,
+            text: entry,
+            height,
+            entry_type: LogEntryType::UserInput,
         });
         if self.log_items.len() > 1000 {
             self.log_items.drain(..100);
@@ -675,7 +703,7 @@ impl TuiState {
                     item_id,
                     text: segment.to_string(),
                     height: 1,
-                    is_dump: false,
+                    entry_type: LogEntryType::Stream,
                 });
                 if is_last {
                     continue;
@@ -686,7 +714,7 @@ impl TuiState {
                     item_id: new_item_id,
                     text: String::new(),
                     height: 0,
-                    is_dump: false,
+                    entry_type: LogEntryType::Stream,
                 });
                 continue;
             }
@@ -701,7 +729,7 @@ impl TuiState {
                             item_id: new_item_id,
                             text: String::new(),
                             height: 0,
-                            is_dump: false,
+                            entry_type: LogEntryType::Stream,
                         });
                     }
                 }
@@ -724,9 +752,9 @@ impl TuiState {
                 self.thinking_item_id = Some(item_id.clone());
                 self.log_items.push(LogItem {
                     item_id,
-                    text: format!("  [thinking] {}", segment),
+                    text: segment.to_string(),
                     height: 1,
-                    is_dump: false,
+                    entry_type: LogEntryType::Thinking,
                 });
                 if is_last {
                     continue;
@@ -735,9 +763,9 @@ impl TuiState {
                 self.thinking_item_id = Some(new_item_id.clone());
                 self.log_items.push(LogItem {
                     item_id: new_item_id,
-                    text: "  [thinking] ".to_string(),
+                    text: String::new(),
                     height: 1,
-                    is_dump: false,
+                    entry_type: LogEntryType::Thinking,
                 });
                 continue;
             }
@@ -750,9 +778,9 @@ impl TuiState {
                         self.thinking_item_id = Some(new_item_id.clone());
                         self.log_items.push(LogItem {
                             item_id: new_item_id,
-                            text: "  [thinking] ".to_string(),
+                            text: String::new(),
                             height: 1,
-                            is_dump: false,
+                            entry_type: LogEntryType::Thinking,
                         });
                     }
                 }
@@ -763,22 +791,23 @@ impl TuiState {
         }
     }
 
-    fn add_tool_call_chunk(&mut self, chunk: String, prefix: &str) {
+    fn add_tool_call_chunk(&mut self, chunk: String) {
+        let height = chunk.matches('\n').count() + 1;
         if self.tool_call_item_id.is_none() {
             let item_id = uuid::Uuid::new_v4().to_string();
             self.tool_call_item_id = Some(item_id.clone());
             self.log_items.push(LogItem {
                 item_id,
-                text: format!("{}{}", prefix, chunk),
-                height: chunk.matches('\n').count() + 1,
-                is_dump: false,
+                text: chunk,
+                height,
+                entry_type: LogEntryType::ToolCall,
             });
             return;
         }
         if let Some(active_id) = &self.tool_call_item_id {
             if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
-                item.text = format!("{}{}", prefix, chunk);
-                item.height = chunk.matches('\n').count() + 1;
+                item.text = chunk;
+                item.height = height;
             }
         }
         if self.at_bottom {
@@ -786,22 +815,23 @@ impl TuiState {
         }
     }
 
-    fn add_tool_result_chunk(&mut self, chunk: String, prefix: &str) {
+    fn add_tool_result_chunk(&mut self, chunk: String) {
+        let height = chunk.matches('\n').count() + 1;
         if self.tool_result_item_id.is_none() {
             let item_id = uuid::Uuid::new_v4().to_string();
             self.tool_result_item_id = Some(item_id.clone());
             self.log_items.push(LogItem {
                 item_id,
-                text: format!("{}{}", prefix, chunk),
-                height: chunk.matches('\n').count() + 1,
-                is_dump: false,
+                text: chunk,
+                height,
+                entry_type: LogEntryType::ToolResult,
             });
             return;
         }
         if let Some(active_id) = &self.tool_result_item_id {
             if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
-                item.text = format!("{}{}", prefix, chunk);
-                item.height = chunk.matches('\n').count() + 1;
+                item.text = chunk;
+                item.height = height;
             }
         }
         if self.at_bottom {
@@ -840,7 +870,7 @@ impl TuiState {
             item_id,
             text,
             height,
-            is_dump: true,
+            entry_type: LogEntryType::Dump,
         });
         if self.log_items.len() > 1000 {
             self.log_items.drain(..100);
@@ -868,18 +898,20 @@ impl TuiState {
         let lines: Vec<Line<'static>> = self.log_items
             .iter()
             .flat_map(|item| {
+                let height_prefix = format!("{:02} ", item.height);
                 item.text.split('\n').map(|part| {
-                    if part.starts_with("  [thinking] ") {
-                        Line::from(part.to_string()).style(Style::default().fg(Color::DarkGray))
-                    } else if part.starts_with("  [tool_call] ") {
-                        Line::from(part.to_string()).style(Style::default().fg(Color::Yellow))
-                    } else if part.starts_with("  [tool_result] ") {
-                        Line::from(part.to_string()).style(Style::default().fg(Color::Green))
-                    } else if item.is_dump {
-                        Line::from(part.to_string()).style(Style::default().fg(Color::Cyan))
-                    } else {
-                        Line::from(part.to_string())
-                    }
+                    let style = match item.entry_type {
+                        LogEntryType::Thinking => Style::default().fg(Color::DarkGray),
+                        LogEntryType::ToolCall => Style::default().fg(Color::Yellow),
+                        LogEntryType::ToolResult => Style::default().fg(Color::Green),
+                        LogEntryType::Dump => Style::default().fg(Color::Cyan),
+                        LogEntryType::UserInput => Style::default().bg(LIGHT_GRAY),
+                        LogEntryType::Stream | LogEntryType::Log => Style::default(),
+                        LogEntryType::Bottom => Style::default(),
+                    };
+                    let mut spans = vec![Span::raw(height_prefix.clone())];
+                    spans.push(Span::raw(part.to_string()));
+                    Line::from(spans).style(style)
                 }).collect::<Vec<_>>()
             })
             .collect();
@@ -893,7 +925,7 @@ impl TuiState {
             item_id,
             text: entry,
             height,
-            is_dump: false,
+            entry_type: LogEntryType::Bottom,
         });
         if self.bottom_items.len() > 100 {
             self.bottom_items.drain(..10);
@@ -913,7 +945,12 @@ impl TuiState {
         let mut lines: Vec<Line<'static>> = Vec::new();
         let mut current_line = 0;
         for item in &self.bottom_items {
-            let item_lines: Vec<Line<'static>> = item.text.split('\n').map(|part| Line::from(part.to_string())).collect();
+            let height_prefix = format!("{:02} ", item.height);
+            let item_lines: Vec<Line<'static>> = item.text.split('\n').map(|part| {
+                let mut spans = vec![Span::raw(height_prefix.clone())];
+                spans.push(Span::raw(part.to_string()));
+                Line::from(spans)
+            }).collect();
             for line in item_lines {
                 if current_line >= start && current_line < start + 5 {
                     lines.push(line);
