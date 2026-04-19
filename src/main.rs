@@ -113,6 +113,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // Setup tracing with bus layer
+    bus.register_announcement(sar_core::actor::ActorAnnouncement {
+        id: "sar-tracing".to_string(),
+        subscriptions: Vec::new(),
+        publications: vec![config.topics.log.clone()],
+    }).await;
     let bus_layer = sar_tracing::BusLayer::new(
         bus.clone(),
         config.topics.log.clone(),

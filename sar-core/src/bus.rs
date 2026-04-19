@@ -1,7 +1,7 @@
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
-use crate::actor::{Actor, ActorJoinHandle};
+use crate::actor::{Actor, ActorAnnouncement, ActorJoinHandle, TopicAnnouncement};
 use crate::message::Message;
 
 #[derive(Debug, Clone)]
@@ -24,6 +24,7 @@ pub struct SarBus {
     actors: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, ActorInfo>>>,
     topic_subscribers: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, std::collections::HashSet<String>>>>,
     topic_publishers: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, std::collections::HashSet<String>>>>,
+    announced_actors: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, ActorAnnouncement>>>,
 }
 
 impl SarBus {
@@ -33,6 +34,7 @@ impl SarBus {
             actors: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             topic_subscribers: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             topic_publishers: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            announced_actors: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -57,6 +59,11 @@ impl SarBus {
     }
 
     pub async fn publish(&self, actor_id: &str, message: Message) -> Result<(), BusError> {
+        if !self.is_announced(actor_id).await {
+            error!("Actor '{}' has not announced and cannot publish", actor_id);
+            return Err(BusError::UnannouncedActor(actor_id.to_string()));
+        }
+
         let topic = message.topic.clone();
         let capacity = 1000;
         self.ensure_topic(&topic, capacity).await;
@@ -160,6 +167,52 @@ impl SarBus {
         actors.values().cloned().collect()
     }
 
+    pub async fn register_announcement(&self, announcement: ActorAnnouncement) {
+        let mut actors = self.announced_actors.write().await;
+        actors.insert(announcement.id.clone(), announcement);
+    }
+
+    pub async fn list_announced_actors(&self) -> Vec<ActorAnnouncement> {
+        let actors = self.announced_actors.read().await;
+        actors.values().cloned().collect()
+    }
+
+    pub async fn list_announced_topics(&self) -> Vec<TopicAnnouncement> {
+        let actors = self.announced_actors.read().await;
+        let mut topics: std::collections::HashMap<String, TopicAnnouncement> = std::collections::HashMap::new();
+
+        for announcement in actors.values() {
+            for sub in &announcement.subscriptions {
+                topics.entry(sub.clone()).or_insert_with(|| TopicAnnouncement {
+                    name: sub.clone(),
+                    subscribers: Vec::new(),
+                    publishers: Vec::new(),
+                }).subscribers.push(announcement.id.clone());
+            }
+            for pub_topic in &announcement.publications {
+                topics.entry(pub_topic.clone()).or_insert_with(|| TopicAnnouncement {
+                    name: pub_topic.clone(),
+                    subscribers: Vec::new(),
+                    publishers: Vec::new(),
+                }).publishers.push(announcement.id.clone());
+            }
+        }
+
+        let mut result: Vec<TopicAnnouncement> = topics.into_values().collect();
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        result
+    }
+
+    pub async fn is_announced(&self, actor_id: &str) -> bool {
+        let actors = self.announced_actors.read().await;
+        actors.contains_key(actor_id)
+    }
+
+    pub async fn get_announced(&self, actor_id: &str) -> Option<ActorAnnouncement> {
+        let actors = self.announced_actors.read().await;
+        actors.get(actor_id).cloned()
+    }
+
     pub async fn list_topic_info(&self) -> Vec<TopicInfo> {
         let topics = self.topics.read().await;
         let subscribers = self.topic_subscribers.read().await;
@@ -186,7 +239,9 @@ impl SarBus {
         actor: A,
     ) -> Result<ActorJoinHandle, BusError> {
         let actor_id = actor.id().clone();
-        info!("Spawning actor: {}", actor_id);
+        let announcement = actor.announce();
+        info!("Spawning actor: {} (announced {} subs, {} pubs)", actor_id, announcement.subscriptions.len(), announcement.publications.len());
+        self.register_announcement(announcement.clone()).await;
 
         let bus = self.clone();
         let id_for_task = actor_id.clone();
@@ -229,6 +284,7 @@ impl Clone for SarBus {
             actors: self.actors.clone(),
             topic_subscribers: self.topic_subscribers.clone(),
             topic_publishers: self.topic_publishers.clone(),
+            announced_actors: self.announced_actors.clone(),
         }
     }
 }
@@ -241,4 +297,6 @@ pub enum BusError {
     Actor(String),
     #[error("Channel closed")]
     ChannelClosed,
+    #[error("Actor '{}' has not announced and cannot publish", _0)]
+    UnannouncedActor(String),
 }

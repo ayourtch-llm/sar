@@ -44,6 +44,18 @@ impl Actor for LlmTestActor {
         format!("sar-llm-test-{}", self.index)
     }
 
+    fn announce(&self) -> sar_core::actor::ActorAnnouncement {
+        sar_core::actor::ActorAnnouncement {
+            id: self.id(),
+            subscriptions: vec![
+                self.input_topic.clone(),
+                self.llm_out_topic.clone(),
+                self.llm_stream_topic.clone(),
+            ],
+            publications: vec![self.stream_output_topic.clone()],
+        }
+    }
+
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut input_rx = bus.subscribe(&self.id(), &self.input_topic).await.map_err(|e| {
             format!("Failed to subscribe to input topic '{}': {}", self.input_topic, e)

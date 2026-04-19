@@ -69,6 +69,19 @@ impl Actor for UiHubActor {
         format!("sar-ui-hub-{}", self.config.name)
     }
 
+    fn announce(&self) -> sar_core::actor::ActorAnnouncement {
+        let mut subs = vec![self.config.input_topic.clone()];
+        subs.extend(self.config.subscribe_to.clone());
+        let mut pubs = self.config.route_to.clone();
+        pubs.push(self.config.user_topic.clone());
+        pubs.push(crate::USER_CONTROL_TOPIC.to_string());
+        sar_core::actor::ActorAnnouncement {
+            id: self.id(),
+            subscriptions: subs,
+            publications: pubs.into_iter().collect::<std::collections::HashSet<_>>().into_iter().collect(),
+        }
+    }
+
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!(
             "UI hub '{}' starting: user_topic={}, input_topic={}, subscribe_to={}, route_to={}",

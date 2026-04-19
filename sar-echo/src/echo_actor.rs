@@ -27,6 +27,14 @@ impl Actor for EchoActor {
         APP_ID.to_string()
     }
 
+    fn announce(&self) -> sar_core::actor::ActorAnnouncement {
+        sar_core::actor::ActorAnnouncement {
+            id: self.id(),
+            subscriptions: vec![self.input_topic.clone()],
+            publications: vec![self.log_topic.clone()],
+        }
+    }
+
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut rx = bus.subscribe(&self.id(), &self.input_topic).await.map_err(|e| {
             format!("Failed to subscribe to input topic '{}': {}", self.input_topic, e)

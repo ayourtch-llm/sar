@@ -194,6 +194,25 @@ impl Actor for LlmTestLoopToolsActor {
         format!("sar-llm-test-loop-tools-{}", self.index)
     }
 
+    fn announce(&self) -> sar_core::actor::ActorAnnouncement {
+        let mut subs = vec![
+            self.input_topic.clone(),
+            self.llm_out_topic.clone(),
+            self.llm_stream_topic.clone(),
+            self.llm_tool_calls_topic.clone(),
+            TOOLS_RESULTS_TOPIC.to_string(),
+        ];
+        let tools = self.tools.lock().unwrap();
+        for tool in tools.iter() {
+            subs.push(format!("tool:{}:execute", tool.tool_syntax().name));
+        }
+        sar_core::actor::ActorAnnouncement {
+            id: self.id(),
+            subscriptions: subs,
+            publications: vec![self.stream_output_topic.clone()],
+        }
+    }
+
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let conversation_messages: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
 

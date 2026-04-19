@@ -4,9 +4,31 @@ use crate::bus::SarBus;
 
 pub type ActorId = String;
 
+#[derive(Debug, Clone)]
+pub struct ActorAnnouncement {
+    pub id: ActorId,
+    pub subscriptions: Vec<String>,
+    pub publications: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TopicAnnouncement {
+    pub name: String,
+    pub subscribers: Vec<ActorId>,
+    pub publishers: Vec<ActorId>,
+}
+
 #[async_trait::async_trait]
 pub trait Actor: Send + Sized {
     fn id(&self) -> ActorId;
+
+    fn announce(&self) -> ActorAnnouncement {
+        ActorAnnouncement {
+            id: self.id(),
+            subscriptions: Vec::new(),
+            publications: Vec::new(),
+        }
+    }
 
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }

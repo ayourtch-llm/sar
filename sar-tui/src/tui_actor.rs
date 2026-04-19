@@ -47,6 +47,14 @@ impl Actor for TuiActor {
         APP_ID.to_string()
     }
 
+    fn announce(&self) -> sar_core::actor::ActorAnnouncement {
+        sar_core::actor::ActorAnnouncement {
+            id: self.id(),
+            subscriptions: vec![self.user_topic.clone(), self.bottom_panel_topic.clone()],
+            publications: vec![self.input_topic.clone()],
+        }
+    }
+
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         terminal::enable_raw_mode()?;
         crossterm::execute!(
@@ -372,24 +380,43 @@ impl Actor for TuiActor {
                                         continue;
                                     }
                                     if input.trim() == "/list topics" {
-                                        let topics = bus.list_topic_info().await;
+                                        let topics = bus.list_announced_topics().await;
+                                        let runtime = bus.list_topic_info().await;
                                         let mut lines = vec!["=== Topics ===".to_string()];
-                                        for topic in &topics {
-                                            lines.push(format!("  {} (capacity: {})", topic.name, topic.capacity));
-                                            if !topic.subscribers.is_empty() {
+                                        let mut all_topics: std::collections::HashMap<String, (Vec<String>, Vec<String>, usize)> = std::collections::HashMap::new();
+                                        for t in &topics {
+                                            let entry = all_topics.entry(t.name.clone()).or_insert_with(|| (Vec::new(), Vec::new(), 0));
+                                            entry.0.extend(t.subscribers.clone());
+                                            entry.1.extend(t.publishers.clone());
+                                        }
+                                        for t in &runtime {
+                                            let entry = all_topics.entry(t.name.clone()).or_insert_with(|| (Vec::new(), Vec::new(), 0));
+                                            entry.2 = t.capacity;
+                                            for s in &t.subscribers {
+                                                if !entry.0.contains(s) { entry.0.push(s.clone()); }
+                                            }
+                                            for p in &t.publishers {
+                                                if !entry.1.contains(p) { entry.1.push(p.clone()); }
+                                            }
+                                        }
+                                        let mut sorted: Vec<_> = all_topics.into_iter().collect();
+                                        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                                        for (name, (subs, pubs, cap)) in &sorted {
+                                            lines.push(format!("  {} (capacity: {})", name, cap));
+                                            if !subs.is_empty() {
                                                 lines.push("    subscribers:".to_string());
-                                                for sub in &topic.subscribers {
+                                                for sub in subs {
                                                     lines.push(format!("      - {}", sub));
                                                 }
                                             }
-                                            if !topic.publishers.is_empty() {
+                                            if !pubs.is_empty() {
                                                 lines.push("    publishers:".to_string());
-                                                for publisher in &topic.publishers {
+                                                for publisher in pubs {
                                                     lines.push(format!("      - {}", publisher));
                                                 }
                                             }
                                         }
-                                        if topics.is_empty() {
+                                        if sorted.is_empty() {
                                             lines.push("  (no topics)".to_string());
                                         }
                                         for line in lines {

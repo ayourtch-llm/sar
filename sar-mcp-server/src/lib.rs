@@ -183,6 +183,18 @@ impl Actor for McpServerActor {
         format!("mcp-{}", self.prefix)
     }
 
+    fn announce(&self) -> sar_core::actor::ActorAnnouncement {
+        let mut pubs = Vec::new();
+        for tool in &self.tools {
+            pubs.push(format!("tool:{}:execute", tool.name));
+        }
+        sar_core::actor::ActorAnnouncement {
+            id: self.id(),
+            subscriptions: Vec::new(),
+            publications: pubs,
+        }
+    }
+
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Spawn tool runners for this MCP server
         let peer = self.peer.clone();

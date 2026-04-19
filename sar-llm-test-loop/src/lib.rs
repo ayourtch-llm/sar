@@ -45,6 +45,18 @@ impl Actor for LlmTestLoopActor {
         format!("sar-llm-test-loop-{}", self.index)
     }
 
+    fn announce(&self) -> sar_core::actor::ActorAnnouncement {
+        sar_core::actor::ActorAnnouncement {
+            id: self.id(),
+            subscriptions: vec![
+                self.input_topic.clone(),
+                self.llm_out_topic.clone(),
+                self.llm_stream_topic.clone(),
+            ],
+            publications: vec![self.stream_output_topic.clone()],
+        }
+    }
+
     async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let conversation_history: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
