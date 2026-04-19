@@ -206,12 +206,11 @@ impl Actor for McpServerActor {
             let bus = bus.clone();
             let tool_name_prefix = format!("{}:{}", prefix, tool.name);
 
-            let handle = tokio::spawn(async move {
+            tokio::spawn(async move {
                 if let Err(e) = runner.run(&bus).await {
                     error!("MCP tool '{}' runner failed: {}", tool_name_prefix, e);
                 }
             });
-            let _ = handle.await;
         }
 
         Ok(())
