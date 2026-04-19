@@ -1,8 +1,7 @@
 use sar_core::SarBus;
-use sar_llm_test_loop_tools::calculator::CalculatorTool;
-use sar_llm_test_loop_tools::sleep_tool::SleepTool;
-use sar_llm_test_loop_tools::tool_actor::ToolActorRunner;
-use sar_llm_test_loop_tools::ToolActorWrapper;
+use sar_tool_actors::ToolActorRunner;
+use sar_tool_calculator::CalculatorTool;
+use sar_tool_sleep::SleepTool;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -17,12 +16,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Create tool execution topics
     bus.create_topic("tool:results", 1000).await;
     bus.create_topic("tool:calculator:execute", 100).await;
-    bus.create_topic("tool:calculator:cancel", 100).await;
     bus.create_topic("tool:sleep:execute", 100).await;
-    bus.create_topic("tool:sleep:cancel", 100).await;
+    bus.create_topic("user:control", 100).await;
 
     // Spawn tool actor runners (independent async actors)
-    let calculator_runner = ToolActorRunner::new(ToolActorWrapper::new(CalculatorTool::new()));
+    let calculator_runner = ToolActorRunner::new(CalculatorTool::new());
     let sleep_runner = ToolActorRunner::new(SleepTool::new());
 
     let bus_for_calc = bus.clone();

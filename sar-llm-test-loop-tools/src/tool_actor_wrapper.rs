@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::Tool;
-use crate::tool_actor::{ToolActor, ToolSyntax};
+use sar_tool_actors::{ToolActor, ToolSyntax};
 
 /// Wraps a `Tool` implementation to make it compatible with `ToolActor`.
 ///

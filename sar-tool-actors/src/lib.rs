@@ -201,8 +201,8 @@ impl ToolActorRunner {
                                             }
                                         }
                                     }
-                                    Err(RecvError::Lagged(_)) => {}
-                                    Err(RecvError::Closed) => break,
+                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                                 }
                             }
                         }
@@ -222,13 +222,13 @@ impl ToolActorRunner {
                         }
                     }
                 }
-                Err(RecvError::Lagged(n)) => {
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     warn!(
                         "Tool '{}' lagged behind, dropped {} messages",
                         self.tool_name, n
                     );
                 }
-                Err(RecvError::Closed) => {
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     info!("Tool '{}' execute topic closed", self.tool_name);
                     break;
                 }
@@ -238,5 +238,3 @@ impl ToolActorRunner {
         Ok(())
     }
 }
-
-use tokio::sync::broadcast::error::RecvError;

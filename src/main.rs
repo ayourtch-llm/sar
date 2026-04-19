@@ -8,10 +8,9 @@ use sar_core::{Config, SarBus};
 use sar_llm::LlmActor;
 use sar_llm_test_loop::LlmTestLoopActor;
 use sar_llm_test_loop_tools::LlmTestLoopToolsActor;
-use sar_llm_test_loop_tools::calculator::CalculatorTool;
-use sar_llm_test_loop_tools::sleep_tool::SleepTool;
-use sar_llm_test_loop_tools::tool_actor::ToolActorRunner;
-use sar_llm_test_loop_tools::ToolActorWrapper;
+use sar_tool_actors::ToolActorRunner;
+use sar_tool_calculator::CalculatorTool;
+use sar_tool_sleep::SleepTool;
 use sar_ui_hub::UiHubActor;
 use tracing::{error, info};
 use tracing_subscriber::layer::SubscriberExt;
@@ -187,7 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     (*bus).spawn_actor(llm_test_loop_actor).await?;
 
     // Spawn tool actor runners (independent async actors)
-    let calculator_runner = ToolActorRunner::new(ToolActorWrapper::new(CalculatorTool::new()));
+    let calculator_runner = ToolActorRunner::new(CalculatorTool::new());
     let sleep_runner = ToolActorRunner::new(SleepTool::new());
     let bus_for_tools = bus.clone();
     tokio::spawn(async move {
@@ -212,7 +211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "llm:0:tool_calls".to_string(),
         "llm-test-tools:0:stream".to_string(),
     )
-    .with_tool(ToolActorWrapper::new(CalculatorTool::new()))
+    .with_tool(CalculatorTool::new())
     .with_tool(SleepTool::new());
     (*bus).spawn_actor(llm_test_tools_actor).await?;
 

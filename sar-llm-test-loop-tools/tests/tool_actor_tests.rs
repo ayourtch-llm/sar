@@ -1,6 +1,7 @@
-use sar_llm_test_loop_tools::tool_actor::{ToolActor, ToolActorRunner, ToolExecuteMessage, ToolResultMessage, ToolSyntax};
 use sar_llm_test_loop_tools::LlmTestLoopToolsActor;
-use sar_llm_test_loop_tools::sleep_tool::SleepTool;
+use sar_tool_actors::{ToolActor, ToolActorRunner, ToolExecuteMessage, ToolResultMessage, ToolSyntax};
+use sar_tool_calculator::CalculatorTool;
+use sar_tool_sleep::SleepTool;
 use serde_json::json;
 
 // ============================================================
@@ -217,9 +218,6 @@ async fn test_build_tool_defs_from_tool_actors() {
 
 #[tokio::test]
 async fn test_add_and_remove_with_calculator() {
-    use sar_llm_test_loop_tools::ToolActorWrapper;
-    use sar_llm_test_loop_tools::calculator::CalculatorTool;
-
     let actor = LlmTestLoopToolsActor::new(
         0,
         "test:in".to_string(),
@@ -230,7 +228,7 @@ async fn test_add_and_remove_with_calculator() {
         "test:stream".to_string(),
     );
 
-    actor.add_tool(ToolActorWrapper::new(CalculatorTool::new())).await;
+    actor.add_tool(CalculatorTool::new()).await;
 
     let tools = actor.tools.lock().unwrap();
     assert_eq!(tools.len(), 1);
@@ -347,9 +345,6 @@ fn test_tool_actor_runner_creation() {
 
 #[test]
 fn test_tool_actor_runner_with_calculator() {
-    use sar_llm_test_loop_tools::ToolActorWrapper;
-    use sar_llm_test_loop_tools::calculator::CalculatorTool;
-
-    let runner = ToolActorRunner::new(ToolActorWrapper::new(CalculatorTool::new()));
+    let runner = ToolActorRunner::new(CalculatorTool::new());
     let _ = runner;
 }

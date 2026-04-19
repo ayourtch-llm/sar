@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
 
-use crate::tool_actor::{ToolActor, ToolSyntax};
+use sar_tool_actors::{ToolActor, ToolSyntax};
 
 #[derive(Debug, Clone)]
 pub struct SleepTool {
