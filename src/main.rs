@@ -207,8 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for (name, mcp_config) in &config.mcp_servers {
         info!("Spawning MCP server '{}'", name);
         let mcp_runner = McpServerRunner::new(name.clone(), mcp_config.clone().into());
-        let bus_for_mcp = bus.clone();
-        let handle = match mcp_runner.spawn(&bus_for_mcp).await {
+        let handle = match mcp_runner.spawn(&bus).await {
             Ok(handle) => {
                 info!(
                     "MCP server '{}' discovered {} tools",
@@ -225,17 +224,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         // Add MCP tool actors to the loop actor
         all_mcp_actors.extend(handle.tool_actors());
-
-        // Spawn tool runners for this MCP server
-        let mcp_bus = bus.clone();
-        let tool_handles = handle.create_tool_runners(&mcp_bus);
-        for handle in tool_handles {
-            tokio::spawn(async move {
-                if let Err(e) = handle.await {
-                    error!("MCP tool runner failed: {}", e);
-                }
-            });
-        }
     }
 
     // Build tool list: built-in tools + MCP tools

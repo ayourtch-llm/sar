@@ -5,6 +5,7 @@ use rmcp::{
     transport::TokioChildProcess,
     ClientHandler, RoleClient,
 };
+use sar_core::actor::Actor;
 use sar_core::bus::SarBus;
 use sar_tool_actors::{ToolActor, ToolActorRunner, ToolSyntax};
 use std::sync::Arc;
@@ -107,105 +108,36 @@ pub struct McpClientHandler;
 
 impl ClientHandler for McpClientHandler {}
 
-/// Manages an MCP server: spawns the process, creates the client, discovers tools.
-pub struct McpServerRunner {
+/// Actor for a single MCP server. Owns the service loop handle to keep the transport alive.
+pub struct McpServerActor {
     prefix: String,
     config: McpServerConfig,
+    peer: Arc<Mutex<rmcp::Peer<RoleClient>>>,
+    tools: Vec<Tool>,
+    _service_handle: JoinHandle<()>,
 }
 
-impl McpServerRunner {
-    pub fn new(prefix: String, config: McpServerConfig) -> Self {
-        Self { prefix, config }
-    }
-
-    /// Spawn the MCP server process and return a handle that can be used to
-    /// create tool actors and runners.
-    pub async fn spawn(
-        &self,
-        _bus: &SarBus,
-    ) -> std::result::Result<McpServerHandle, Box<dyn std::error::Error + Send + Sync>> {
-        let cmd = {
-            let mut c = tokio::process::Command::new(&self.config.command[0]);
-            c.args(&self.config.command[1..]);
-            c
-        };
-        let transport = TokioChildProcess::builder(cmd).spawn()?.0;
-        let service = McpClientHandler;
-        let running_service: Arc<RunningService<RoleClient, McpClientHandler>> = Arc::new(rmcp::serve_client(service, transport).await?);
-        let peer = Arc::new(Mutex::new(running_service.peer().clone()));
-
-        info!(
-            "MCP server '{}' started, discovering tools...",
-            self.prefix
-        );
-
-        // Discover tools
-        let tools: Vec<Tool> = peer.lock().await.list_all_tools().await?;
-
-        info!(
-            "MCP server '{}' exposed {} tools",
-            self.prefix,
-            tools.len()
-        );
-
-        Ok(McpServerHandle {
-            prefix: self.prefix.clone(),
-            peer,
-            _running_service: running_service,
-            tools,
-            default: self.config.default,
-            expose: self.config.expose.clone(),
-        })
-    }
-}
-
-/// Handle to a running MCP server with discovered tools.
+/// Lightweight handle returned after spawning an MCP server actor.
+/// Does NOT own the service loop — the actor does.
 pub struct McpServerHandle {
     prefix: String,
     peer: Arc<Mutex<rmcp::Peer<RoleClient>>>,
-    _running_service: Arc<RunningService<RoleClient, McpClientHandler>>,
     tools: Vec<Tool>,
-    default: bool,
-    expose: Vec<String>,
+    config: McpServerConfig,
 }
 
 impl McpServerHandle {
-    /// Create tool actors and runners for all tools from this MCP server.
-    pub fn create_tool_runners(&self, bus: &SarBus) -> Vec<JoinHandle<()>> {
-        let mut handles = Vec::new();
-
-        let peer = self.peer.clone();
-        let prefix = self.prefix.clone();
-
-        for tool in &self.tools {
-            let tool_actor = McpToolActor::new(tool, peer.clone());
-            let runner = ToolActorRunner::new(tool_actor);
-            let bus = bus.clone();
-            let tool_name_prefix = format!("{}:{}", prefix, tool.name);
-
-            let handle = tokio::spawn(async move {
-                if let Err(e) = runner.run(&bus).await {
-                    error!("MCP tool '{}' runner failed: {}", tool_name_prefix, e);
-                }
-            });
-            handles.push(handle);
-        }
-
-        handles
-    }
-
     /// Get tool actors for tools that should be exposed to the LLM.
-    /// These can be added to LlmTestLoopToolsActor via with_tool().
     pub fn tool_actors(&self) -> Vec<std::sync::Arc<dyn ToolActor>> {
         self.tools
             .iter()
             .filter(|t| {
                 let should_include = |name: &str| -> bool {
-                    if self.default {
+                    if self.config.default {
                         return true;
                     }
-                    if !self.expose.is_empty() {
-                        return self.expose.contains(&name.to_string());
+                    if !self.config.expose.is_empty() {
+                        return self.config.expose.contains(&name.to_string());
                     }
                     false
                 };
@@ -219,20 +151,17 @@ impl McpServerHandle {
     }
 
     /// Get tool syntaxes for tools that should be exposed to the LLM.
-    /// - If `default = true`, all tools are included.
-    /// - If `expose` is non-empty, only exposed tools are included.
-    /// - Otherwise, no tools are included.
     pub fn get_tool_syntaxes(&self) -> Vec<ToolSyntax> {
         if self.tools.is_empty() {
             return vec![];
         }
 
         let should_include = |name: &str| -> bool {
-            if self.default {
+            if self.config.default {
                 return true;
             }
-            if !self.expose.is_empty() {
-                return self.expose.contains(&name.to_string());
+            if !self.config.expose.is_empty() {
+                return self.config.expose.contains(&name.to_string());
             }
             false
         };
@@ -258,6 +187,108 @@ impl McpServerHandle {
     /// Get the list of tool names from this MCP server.
     pub fn tool_names(&self) -> Vec<String> {
         self.tools.iter().map(|t| t.name.as_ref().to_string()).collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl Actor for McpServerActor {
+    fn id(&self) -> sar_core::ActorId {
+        format!("mcp-{}", self.prefix)
+    }
+
+    async fn run(&self, bus: &SarBus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Spawn tool runners for this MCP server
+        let peer = self.peer.clone();
+        let prefix = self.prefix.clone();
+
+        for tool in &self.tools {
+            let tool_actor = McpToolActor::new(tool, peer.clone());
+            let runner = ToolActorRunner::new(tool_actor);
+            let bus = bus.clone();
+            let tool_name_prefix = format!("{}:{}", prefix, tool.name);
+
+            let handle = tokio::spawn(async move {
+                if let Err(e) = runner.run(&bus).await {
+                    error!("MCP tool '{}' runner failed: {}", tool_name_prefix, e);
+                }
+            });
+            let _ = handle.await;
+        }
+
+        Ok(())
+    }
+}
+
+/// Runner to spawn an MCP server actor.
+pub struct McpServerRunner {
+    prefix: String,
+    config: McpServerConfig,
+}
+
+impl McpServerRunner {
+    pub fn new(prefix: String, config: McpServerConfig) -> Self {
+        Self { prefix, config }
+    }
+
+    /// Spawn the MCP server process, initialize the client, discover tools,
+    /// and return an McpServerHandle. The McpServerActor (with service loop)
+    /// is spawned internally and stays alive for the lifetime of the program.
+    pub async fn spawn(
+        &self,
+        bus: &SarBus,
+    ) -> std::result::Result<McpServerHandle, Box<dyn std::error::Error + Send + Sync>> {
+        let cmd = {
+            let mut c = tokio::process::Command::new(&self.config.command[0]);
+            c.args(&self.config.command[1..]);
+            c
+        };
+        let transport = TokioChildProcess::builder(cmd).spawn()?.0;
+        let service = McpClientHandler;
+        let running_service: RunningService<RoleClient, McpClientHandler> = rmcp::serve_client(service, transport).await?;
+        let peer = Arc::new(Mutex::new(running_service.peer().clone()));
+
+        info!(
+            "MCP server '{}' started, discovering tools...",
+            self.prefix
+        );
+
+        // Discover tools
+        let tools: Vec<Tool> = peer.lock().await.list_all_tools().await?;
+
+        info!(
+            "MCP server '{}' exposed {} tools",
+            self.prefix,
+            tools.len()
+        );
+
+        // Spawn the service loop in a background task so it stays alive.
+        // RunningService::waiting() consumes the service and polls the transport loop.
+        // As long as this JoinHandle is alive, the transport stays open.
+        let service_handle = {
+            let rs = running_service;
+            tokio::spawn(async move {
+                let _ = rs.waiting().await;
+            })
+        };
+
+        let actor = McpServerActor {
+            prefix: self.prefix.clone(),
+            config: self.config.clone(),
+            peer: peer.clone(),
+            tools: tools.clone(),
+            _service_handle: service_handle,
+        };
+
+        // Spawn the actor so it stays alive for the lifetime of the program
+        bus.spawn_actor(actor).await?;
+
+        // Return a lightweight handle (the actor owns the service loop)
+        Ok(McpServerHandle {
+            prefix: self.prefix.clone(),
+            peer,
+            tools,
+            config: self.config.clone(),
+        })
     }
 }
 
