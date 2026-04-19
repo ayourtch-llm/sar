@@ -1,5 +1,6 @@
-use sar_llm_test_loop_tools::tool_actor::{ToolActor, ToolSyntax};
+use sar_llm_test_loop_tools::tool_actor::{ToolActor, ToolActorRunner, ToolExecuteMessage, ToolResultMessage, ToolSyntax};
 use sar_llm_test_loop_tools::LlmTestLoopToolsActor;
+use sar_llm_test_loop_tools::sleep_tool::SleepTool;
 use serde_json::json;
 
 // ============================================================
@@ -234,4 +235,121 @@ async fn test_add_and_remove_with_calculator() {
     let tools = actor.tools.lock().unwrap();
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].tool_syntax().name, "calculator");
+}
+
+// ============================================================
+// Tests for async tool execution infrastructure
+// ============================================================
+
+#[test]
+fn test_tool_execute_message_serialize() {
+    let msg = ToolExecuteMessage {
+        tool_call_id: "call_abc123".to_string(),
+        tool_name: "calculator".to_string(),
+        arguments: json!({"expression": "2+2"}),
+    };
+
+    let serialized = serde_json::to_string(&msg).unwrap();
+    let deserialized: ToolExecuteMessage = serde_json::from_str(&serialized).unwrap();
+
+    assert_eq!(deserialized.tool_call_id, "call_abc123");
+    assert_eq!(deserialized.tool_name, "calculator");
+    assert_eq!(deserialized.arguments["expression"], "2+2");
+}
+
+#[test]
+fn test_tool_result_message_serialize() {
+    let msg = ToolResultMessage {
+        tool_call_id: "call_abc123".to_string(),
+        tool_name: "calculator".to_string(),
+        success: true,
+        result: "4".to_string(),
+        error: None,
+    };
+
+    let serialized = serde_json::to_string(&msg).unwrap();
+    let deserialized: ToolResultMessage = serde_json::from_str(&serialized).unwrap();
+
+    assert_eq!(deserialized.tool_call_id, "call_abc123");
+    assert_eq!(deserialized.tool_name, "calculator");
+    assert!(deserialized.success);
+    assert_eq!(deserialized.result, "4");
+    assert!(deserialized.error.is_none());
+}
+
+#[test]
+fn test_tool_result_message_error() {
+    let msg = ToolResultMessage {
+        tool_call_id: "call_xyz".to_string(),
+        tool_name: "sleep".to_string(),
+        success: false,
+        result: String::new(),
+        error: Some("Cancelled".to_string()),
+    };
+
+    let serialized = serde_json::to_string(&msg).unwrap();
+    let deserialized: ToolResultMessage = serde_json::from_str(&serialized).unwrap();
+
+    assert!(!deserialized.success);
+    assert_eq!(deserialized.error, Some("Cancelled".to_string()));
+}
+
+#[test]
+fn test_sleep_tool_syntax() {
+    let tool = SleepTool::new();
+    let syntax = tool.tool_syntax();
+
+    assert_eq!(syntax.name, "sleep");
+    assert_eq!(syntax.description, "Sleep for a specified duration in milliseconds. Useful for testing tool cancellation.");
+    assert_eq!(syntax.parameters["required"][0], "duration_ms");
+}
+
+#[test]
+fn test_sleep_tool_supports_cancel() {
+    let tool = SleepTool::new();
+    assert!(tool.supports_cancel());
+}
+
+#[tokio::test]
+async fn test_sleep_tool_execute() {
+    let tool = SleepTool::new();
+    let result = tool.execute_tool(&json!({"duration_ms": 10})).await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), "Slept for 10ms");
+}
+
+#[tokio::test]
+async fn test_sleep_tool_execute_zero() {
+    let tool = SleepTool::new();
+    let result = tool.execute_tool(&json!({"duration_ms": 0})).await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), "Slept for 0ms");
+}
+
+#[tokio::test]
+async fn test_sleep_tool_execute_missing_arg() {
+    let tool = SleepTool::new();
+    let result = tool.execute_tool(&json!({})).await;
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("duration_ms"));
+}
+
+#[test]
+fn test_tool_actor_runner_creation() {
+    let runner = ToolActorRunner::new(SleepTool::new());
+    // The runner is created successfully - we can't easily test the run() method
+    // in isolation without a bus, but we can verify the runner exists
+    let _ = runner;
+}
+
+#[test]
+fn test_tool_actor_runner_with_calculator() {
+    use sar_llm_test_loop_tools::ToolActorWrapper;
+    use sar_llm_test_loop_tools::calculator::CalculatorTool;
+
+    let runner = ToolActorRunner::new(ToolActorWrapper::new(CalculatorTool::new()));
+    let _ = runner;
 }

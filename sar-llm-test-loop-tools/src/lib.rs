@@ -4,6 +4,7 @@ use sar_core::bus::SarBus;
 use sar_core::config::LlmConfig;
 use sar_core::message::Message;
 use sar_llm::LlmRequest;
+use crate::tool_actor::ToolResultMessage;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::error::RecvError;
@@ -12,8 +13,11 @@ use tracing::{error, info, warn};
 pub mod calculator;
 pub use calculator::CalculatorTool;
 
+pub mod sleep_tool;
+pub use sleep_tool::SleepTool;
+
 pub mod tool_actor;
-pub use tool_actor::{ToolActor, ToolSyntax};
+pub use tool_actor::{ToolActor, ToolActorRunner, ToolExecuteMessage, ToolSyntax};
 
 pub mod tool_actor_wrapper;
 pub use tool_actor_wrapper::ToolActorWrapper;
@@ -25,6 +29,8 @@ pub trait Tool: Send + Sync {
     fn parameters(&self) -> &serde_json::Value;
     async fn execute(&self, arguments: &serde_json::Value) -> Result<String, String>;
 }
+
+pub const TOOLS_RESULTS_TOPIC: &str = "tool:results";
 
 #[derive(Default)]
 pub struct LlmTestLoopToolsActor {
@@ -83,18 +89,14 @@ impl LlmTestLoopToolsActor {
         self.tools.lock().unwrap().retain(|t| t.tool_syntax().name != name);
     }
 
-    async fn find_tool_index(&self, name: &str) -> Option<usize> {
-        self.tools.lock().unwrap().iter().position(|t| t.tool_syntax().name == name)
-    }
-
     fn format_dump(&self, messages: &[serde_json::Value], tool_defs: &[serde_json::Value]) -> String {
         let mut dump = String::new();
         dump.push_str("=== LLM Request Dump ===\n\n");
-        
+
         dump.push_str("Model: (default)\n");
         dump.push_str(&format!("Temperature: 0.7\n"));
         dump.push_str(&format!("Max tokens: 65536\n\n"));
-        
+
         if !tool_defs.is_empty() {
             dump.push_str("Tools:\n");
             for tool in tool_defs {
@@ -105,12 +107,12 @@ impl LlmTestLoopToolsActor {
             }
             dump.push('\n');
         }
-        
+
         dump.push_str("Messages:\n");
         for (i, msg) in messages.iter().enumerate() {
             let role = msg["role"].as_str().unwrap_or("unknown");
             dump.push_str(&format!("\n--- Message {} ({}): ---\n", i + 1, role));
-            
+
             match role {
                 "user" => {
                     let content = msg["content"].as_str().unwrap_or("");
@@ -140,7 +142,7 @@ impl LlmTestLoopToolsActor {
                 }
             }
         }
-        
+
         dump.push_str("\n=== End Dump ===\n");
         dump
     }
@@ -215,6 +217,10 @@ impl Actor for LlmTestLoopToolsActor {
             format!("Failed to subscribe to tool calls topic '{}': {}", self.llm_tool_calls_topic, e)
         })?;
 
+        let mut tool_results_rx = bus.subscribe(&self.id(), TOOLS_RESULTS_TOPIC).await.map_err(|e| {
+            format!("Failed to subscribe to tool results topic '{}': {}", TOOLS_RESULTS_TOPIC, e)
+        })?;
+
         let tool_defs: Vec<serde_json::Value> = {
             let tools = self.tools.lock().unwrap();
             tools.iter()
@@ -228,6 +234,8 @@ impl Actor for LlmTestLoopToolsActor {
             self.input_topic,
             self.tools.lock().unwrap().len()
         );
+
+        let mut pending_count: usize = 0;
 
         loop {
             tokio::select! {
@@ -342,7 +350,7 @@ impl Actor for LlmTestLoopToolsActor {
                     match result {
                         Ok(msg) => {
                             info!("LLM test loop tools actor {} received tool calls from '{}'", self.index, msg.source);
-                            
+
                             let tool_calls: Vec<serde_json::Value> = match serde_json::from_value(msg.payload.clone()) {
                                 Ok(tc) => tc,
                                 Err(e) => {
@@ -359,93 +367,61 @@ impl Actor for LlmTestLoopToolsActor {
                                 }));
                             }
 
-                            let mut tool_results = Vec::new();
+                            // Track pending tool calls
+                            pending_count = tool_calls.len();
+
                             for tc in &tool_calls {
                                 let func_name = tc["function"]["name"].as_str().unwrap_or("");
                                 let func_args_str = tc["function"]["arguments"].as_str().unwrap_or("");
                                 let tool_call_id = tc["id"].as_str().unwrap_or("");
-                                
-                                info!("LLM test loop tools actor {} executing tool call: {}({})", self.index, func_name, func_args_str);
 
-                                let tool_index = self.find_tool_index(func_name).await;
+                                info!("LLM test loop tools actor {} publishing tool call: {}({})", self.index, func_name, func_args_str);
+
                                 let args: serde_json::Value = match serde_json::from_str(func_args_str) {
                                     Ok(a) => a,
                                     Err(e) => {
                                         error!("Failed to parse tool arguments for {}: {}", func_name, e);
-                                        tool_results.push(serde_json::json!({
-                                            "tool_call_id": tool_call_id,
-                                            "name": func_name,
-                                            "content": format!("Error parsing arguments: {}", e),
-                                        }));
+                                        // Publish error result directly to tool:results
+                                        let error_result = ToolResultMessage {
+                                            tool_call_id: tool_call_id.to_string(),
+                                            tool_name: func_name.to_string(),
+                                            success: false,
+                                            result: String::new(),
+                                            error: Some(format!("Error parsing arguments: {}", e)),
+                                        };
+                                        let result_msg = Message::new(
+                                            TOOLS_RESULTS_TOPIC,
+                                            &self.id(),
+                                            serde_json::to_value(&error_result).unwrap(),
+                                        );
+                                        let _ = bus.publish(&self.id(), result_msg).await;
+                                        pending_count -= 1;
                                         continue;
                                     }
                                 };
 
-                                match tool_index {
-                                    Some(idx) => {
-                                        let tool = self.tools.lock().unwrap()[idx].clone();
-                                        match tool.execute_tool(&args).await {
-                                            Ok(result) => {
-                                                info!("LLM test loop tools actor {} tool {} result: {}", self.index, func_name, result);
-                                                let stream_msg = Message::new(
-                                                    &self.stream_output_topic,
-                                                    &self.id(),
-                                                    format!("  [tool_result] {} => {}", func_name, result),
-                                                ).with_type("LlmToolResult");
-                                                if let Err(e) = bus.publish(&self.id(), stream_msg).await {
-                                                    error!("Failed to publish tool result stream: {}", e);
-                                                }
-                                                tool_results.push(serde_json::json!({
-                                                    "tool_call_id": tool_call_id,
-                                                    "name": func_name,
-                                                    "content": result,
-                                                }));
-                                            }
-                                            Err(e) => {
-                                                error!("LLM test loop tools actor {} tool {} error: {}", self.index, func_name, e);
-                                                let stream_msg = Message::new(
-                                                    &self.stream_output_topic,
-                                                    &self.id(),
-                                                    format!("  [tool_error] {} => {}", func_name, e),
-                                                ).with_type("LlmToolResult");
-                                                if let Err(e) = bus.publish(&self.id(), stream_msg).await {
-                                                    error!("Failed to publish tool error stream: {}", e);
-                                                }
-                                                tool_results.push(serde_json::json!({
-                                                    "tool_call_id": tool_call_id,
-                                                    "name": func_name,
-                                                    "content": format!("Error: {}", e),
-                                                }));
-                                            }
-                                        }
-                                    }
-                                    None => {
-                                        warn!("LLM test loop tools actor {} tool '{}' not found", self.index, func_name);
-                                        tool_results.push(serde_json::json!({
-                                            "tool_call_id": tool_call_id,
-                                            "name": func_name,
-                                            "content": format!("Error: tool '{}' not found", func_name),
-                                        }));
-                                    }
-                                }
-                            }
+                                // Publish to tool actor topic (async, non-blocking)
+                                let bus_clone = bus.clone();
+                                let self_id = self.id();
+                                let func_name_clone = func_name.to_string();
+                                let tool_call_id_clone = tool_call_id.to_string();
+                                let args_clone = args.clone();
 
-                            {
-                                let mut messages = conversation_messages.lock().await;
-                                for tr in &tool_results {
-                                    messages.push(serde_json::json!({
-                                        "role": "tool",
-                                        "tool_call_id": tr["tool_call_id"],
-                                        "name": tr["name"],
-                                        "content": tr["content"],
-                                    }));
-                                }
-                            }
-
-                            info!("LLM test loop tools actor {} sending tool results back to LLM, message count: {}", self.index, conversation_messages.lock().await.len());
-                            
-                            if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
-                                error!("Failed to send tool results to LLM: {}", e);
+                                tokio::spawn(async move {
+                                    let exec_msg = ToolExecuteMessage {
+                                        tool_call_id: tool_call_id_clone,
+                                        tool_name: func_name_clone,
+                                        arguments: args_clone,
+                                    };
+                                    let msg = Message::new(
+                                        &format!("tool:{}:execute", exec_msg.tool_name),
+                                        &self_id,
+                                        serde_json::to_value(&exec_msg).unwrap(),
+                                    );
+                                    if let Err(e) = bus_clone.publish(&self_id, msg).await {
+                                        error!("Failed to publish tool execute: {}", e);
+                                    }
+                                });
                             }
                         }
                         Err(RecvError::Lagged(n)) => {
@@ -456,6 +432,82 @@ impl Actor for LlmTestLoopToolsActor {
                         }
                         Err(RecvError::Closed) => {
                             info!("LLM test loop tools actor {} tool calls topic closed", self.index);
+                        }
+                    }
+                }
+                result = tool_results_rx.recv() => {
+                    match result {
+                        Ok(msg) => {
+                            let tool_result: ToolResultMessage = match serde_json::from_value(msg.payload) {
+                                Ok(tr) => tr,
+                                Err(e) => {
+                                    error!("Failed to parse tool result message: {}", e);
+                                    continue;
+                                }
+                            };
+
+                            info!(
+                                "LLM test loop tools actor {} received tool result: tool='{}' success={} call_id='{}'",
+                                self.index, tool_result.tool_name, tool_result.success, tool_result.tool_call_id
+                            );
+
+                            if tool_result.success {
+                                {
+                                    let mut messages = conversation_messages.lock().await;
+                                    messages.push(serde_json::json!({
+                                        "role": "tool",
+                                        "tool_call_id": tool_result.tool_call_id,
+                                        "name": tool_result.tool_name,
+                                        "content": tool_result.result,
+                                    }));
+                                }
+
+                                let stream_msg = Message::new(
+                                    &self.stream_output_topic,
+                                    &self.id(),
+                                    format!("  [tool_result] {}({}) => {}", tool_result.tool_name, tool_result.tool_call_id, tool_result.result),
+                                ).with_type("LlmToolResult");
+                                if let Err(e) = bus.publish(&self.id(), stream_msg).await {
+                                    error!("Failed to publish tool result stream: {}", e);
+                                }
+                            } else {
+                                {
+                                    let mut messages = conversation_messages.lock().await;
+                                    messages.push(serde_json::json!({
+                                        "role": "tool",
+                                        "tool_call_id": tool_result.tool_call_id,
+                                        "name": tool_result.tool_name,
+                                        "content": format!("Error: {}", tool_result.error.as_deref().unwrap_or("unknown")),
+                                    }));
+                                }
+
+                                let stream_msg = Message::new(
+                                    &self.stream_output_topic,
+                                    &self.id(),
+                                    format!("  [tool_error] {}({}) => {}", tool_result.tool_name, tool_result.tool_call_id, tool_result.error.as_deref().unwrap_or("unknown")),
+                                ).with_type("LlmToolResult");
+                                if let Err(e) = bus.publish(&self.id(), stream_msg).await {
+                                    error!("Failed to publish tool error stream: {}", e);
+                                }
+                            }
+
+                            pending_count -= 1;
+
+                            if pending_count == 0 {
+                                info!("LLM test loop tools actor {} all tool calls resolved, sending conversation back to LLM, message count: {}", self.index, conversation_messages.lock().await.len());
+                                if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
+                                    error!("Failed to send tool results to LLM: {}", e);
+                                }
+                            }
+                        }
+                        Err(RecvError::Lagged(n)) => {
+                            warn!(
+                                "LLM test loop tools actor {} lagged behind on tool results, dropped {} messages",
+                                self.index, n
+                            );
+                        }
+                        Err(RecvError::Closed) => {
+                            warn!("LLM test loop tools actor {} tool results topic closed", self.index);
                         }
                     }
                 }
