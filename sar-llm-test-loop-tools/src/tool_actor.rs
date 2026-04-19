@@ -61,15 +61,6 @@ pub struct ToolCancelMessage {
     pub tool_call_id: String,
 }
 
-/// Message published by the UI hub when the user sends `/continue <reason>`.
-/// Tools that support interrupt-by-continue subscribe to `user:control` and
-/// cancel their current execution if the `tool_name` matches.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ContinueMessage {
-    pub tool_name: String,
-    pub reason: String,
-}
-
 /// Trait for actors that expose tool capabilities.
 ///
 /// This trait is object-safe (dyn compatible), allowing tools to be stored
@@ -201,14 +192,13 @@ impl ToolActorRunner {
                             control_msg = control_rx.recv() => {
                                 match control_msg {
                                     Ok(msg) => {
-                                        match serde_json::from_value::<ContinueMessage>(msg.payload) {
-                                            Ok(continue_msg) if continue_msg.tool_name == self.tool_name => {
+                                        if let Ok(v) = serde_json::from_value::<serde_json::Value>(msg.payload) {
+                                            if v.get("type").and_then(|t| t.as_str()) == Some("continue") {
+                                                let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("");
                                                 abort_handle.abort();
-                                                info!("Tool '{}' cancelled: {}", self.tool_name, continue_msg.reason);
-                                                self.publish_result(bus, &results_topic, &call_id, false, String::new(), Some(format!("Cancelled: {}", continue_msg.reason))).await;
+                                                info!("Tool '{}' cancelled: {}", self.tool_name, reason);
+                                                self.publish_result(bus, &results_topic, &call_id, false, String::new(), Some(format!("Cancelled: {}", reason))).await;
                                             }
-                                            Ok(_) => {}
-                                            Err(_) => {}
                                         }
                                     }
                                     Err(RecvError::Lagged(_)) => {}
