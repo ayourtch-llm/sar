@@ -496,6 +496,7 @@ cd sar-llm-test-loop-tools && cargo run
     - Uses TokioChildProcess for stdio transport, serve_client() for connection
     - Uses Peer::list_all_tools() and Peer::call_tool() for tool operations
     - Handles rmcp's different types: Cow<'static, str> for names, Arc<JsonObject> for schemas
+26. Verified MCP server spawning works end-to-end: config → spawn → discover → add to loop
 25. Integrated MCP servers into sar binary:
     - Added McpServerConfig to sar-core config parsing
     - Added tool_actors() method to McpServerHandle for exposing tools to LLM

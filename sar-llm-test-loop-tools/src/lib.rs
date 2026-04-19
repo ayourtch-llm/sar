@@ -357,10 +357,14 @@ impl Actor for LlmTestLoopToolsActor {
                         Ok(msg) => {
                             info!("LLM test loop tools actor {} received tool calls from '{}'", self.index, msg.source);
 
-                            let tool_calls: Vec<serde_json::Value> = match serde_json::from_value(msg.payload.clone()) {
-                                Ok(tc) => tc,
-                                Err(e) => {
-                                    error!("Failed to parse tool calls: {}", e);
+                            let tool_calls: Vec<serde_json::Value> = match msg.payload {
+                                serde_json::Value::Array(arr) => arr.into_iter().collect(),
+                                serde_json::Value::Object(_) => {
+                                    info!("LLM test loop tools actor {} skipping individual tool call chunk", self.index);
+                                    continue;
+                                }
+                                _ => {
+                                    error!("Failed to parse tool calls: unexpected type");
                                     continue;
                                 }
                             };

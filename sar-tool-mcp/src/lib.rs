@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use rmcp::{
     model::{CallToolRequestParams, RawContent, Tool},
+    service::RunningService,
     transport::TokioChildProcess,
     ClientHandler, RoleClient,
 };
@@ -130,7 +131,7 @@ impl McpServerRunner {
         };
         let transport = TokioChildProcess::builder(cmd).spawn()?.0;
         let service = McpClientHandler;
-        let running_service: rmcp::service::RunningService<RoleClient, McpClientHandler> = rmcp::serve_client(service, transport).await?;
+        let running_service: Arc<RunningService<RoleClient, McpClientHandler>> = Arc::new(rmcp::serve_client(service, transport).await?);
         let peer = Arc::new(Mutex::new(running_service.peer().clone()));
 
         info!(
@@ -150,6 +151,7 @@ impl McpServerRunner {
         Ok(McpServerHandle {
             prefix: self.prefix.clone(),
             peer,
+            _running_service: running_service,
             tools,
             default: self.config.default,
             expose: self.config.expose.clone(),
@@ -161,6 +163,7 @@ impl McpServerRunner {
 pub struct McpServerHandle {
     prefix: String,
     peer: Arc<Mutex<rmcp::Peer<RoleClient>>>,
+    _running_service: Arc<RunningService<RoleClient, McpClientHandler>>,
     tools: Vec<Tool>,
     default: bool,
     expose: Vec<String>,
