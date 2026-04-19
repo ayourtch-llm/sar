@@ -196,11 +196,12 @@ pub struct Message {
 - **SleepTool**: Sleeps for specified duration, `supports_cancel() = true`
 
 ### sar-tool-mcp (sar-tool-mcp/)
-- Connects to stdio MCP servers, discovers their tools, exposes them as sar tools
+- Connects to stdio MCP servers, discovers tools, exposes them as sar tools
+- Uses `rmcp` v0.16 crate (not `rust-mcp-sdk`) for MCP client communication
 - **McpServerConfig**: Command, `default` flag, `expose` list for selective tool exposure
-- **McpServerRunner**: Spawns MCP server process, initializes client, discovers tools
-- **McpToolActor**: Wraps individual MCP tools as `ToolActor` implementations
-- **McpServerHandle**: Provides `create_tool_runners()` and `get_tool_syntaxes()`
+- **McpServerRunner**: Spawns MCP server process via `TokioChildProcess`, initializes client via `serve_client()`, discovers tools via `list_all_tools()`
+- **McpToolActor**: Wraps individual MCP tools as `ToolActor` implementations, calls tools via `Peer::call_tool()`
+- **McpServerHandle**: Provides `create_tool_runners()`, `tool_actors()`, and `get_tool_syntaxes()`
 
 ### sar-llm-test-loop-tools (sar-llm-test-loop-tools/)
 - LLM test loop with fully-async tool execution
@@ -378,7 +379,7 @@ expose = []      # tool names to expose without prefix (empty = all prefixed)
 - sar-core, sar-tool-actors, tokio, tracing, serde, serde_json
 
 ### sar-tool-mcp
-- sar-core, sar-tool-actors, rust-mcp-sdk (client, stdio), tokio, tracing, serde, serde_json, async-trait, thiserror
+- sar-core, sar-tool-actors, rmcp v0.16 (client, transport-io, transport-child-process), tokio, tracing, serde, serde_json, async-trait, thiserror
 
 ### sar (binary)
 - All crates
@@ -489,6 +490,12 @@ cd sar-llm-test-loop-tools && cargo run
     - Use ToMcpClientHandler::to_mcp_client_handler() instead of Box::new()
     - Clone Arc before calling start() (which consumes self)
     - Import async_trait for #[async_trait] on ToolActor impl
+25. Rewrote sar-tool-mcp to use `rmcp` v0.16 instead of `rust-mcp-sdk`:
+    - rust-mcp-sdk and rmcp are different SDK implementations, incompatible with each other
+    - mcp-find-files server uses rmcp, so sar-tool-mcp was rewritten to match
+    - Uses TokioChildProcess for stdio transport, serve_client() for connection
+    - Uses Peer::list_all_tools() and Peer::call_tool() for tool operations
+    - Handles rmcp's different types: Cow<'static, str> for names, Arc<JsonObject> for schemas
 25. Integrated MCP servers into sar binary:
     - Added McpServerConfig to sar-core config parsing
     - Added tool_actors() method to McpServerHandle for exposing tools to LLM

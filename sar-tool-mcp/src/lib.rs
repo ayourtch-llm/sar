@@ -1,23 +1,15 @@
 use async_trait::async_trait;
-use rust_mcp_sdk::mcp_client::{client_runtime, ClientHandler, ClientRuntime, McpClientOptions, ToMcpClientHandler};
-use rust_mcp_sdk::schema::*;
-use rust_mcp_sdk::{McpClient, StdioTransport, TransportOptions};
+use rmcp::{
+    model::{CallToolRequestParams, RawContent, Tool},
+    transport::TokioChildProcess,
+    ClientHandler, RoleClient,
+};
 use sar_core::bus::SarBus;
 use sar_tool_actors::{ToolActor, ToolActorRunner, ToolSyntax};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
-
-impl From<sar_core::config::McpServerConfig> for McpServerConfig {
-    fn from(config: sar_core::config::McpServerConfig) -> Self {
-        Self {
-            command: config.command,
-            default: config.default,
-            expose: config.expose,
-        }
-    }
-}
 
 /// Configuration for a single MCP server.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -37,21 +29,25 @@ pub struct McpToolActor {
     tool_name: String,
     tool_description: String,
     tool_parameters: serde_json::Value,
-    client: Arc<Mutex<Arc<ClientRuntime>>>,
+    peer: Arc<Mutex<rmcp::Peer<RoleClient>>>,
 }
 
 impl McpToolActor {
     pub fn new(
         tool: &Tool,
-        client: Arc<Mutex<Arc<ClientRuntime>>>,
+        peer: Arc<Mutex<rmcp::Peer<RoleClient>>>,
     ) -> Self {
         Self {
-            tool_name: tool.name.clone(),
-            tool_description: tool.description.clone().unwrap_or_default(),
-            tool_parameters: serde_json::to_value(&tool.input_schema).unwrap_or(serde_json::json!({})),
-            client,
+            tool_name: tool.name.as_ref().to_string(),
+            tool_description: tool.description.as_ref().map(|s| s.as_ref().to_string()).unwrap_or_default(),
+            tool_parameters: tool_input_schema_to_json(&tool.input_schema),
+            peer,
         }
     }
+}
+
+fn tool_input_schema_to_json(schema: &Arc<serde_json::Map<String, serde_json::Value>>) -> serde_json::Value {
+    serde_json::Value::Object(schema.as_ref().clone())
 }
 
 #[async_trait]
@@ -65,29 +61,28 @@ impl ToolActor for McpToolActor {
     }
 
     async fn execute_tool(&self, arguments: &serde_json::Value) -> std::result::Result<String, String> {
-        let client = self.client.lock().await;
+        let peer = self.peer.lock().await;
         let args_map: serde_json::Map<String, serde_json::Value> = if let serde_json::Value::Object(m) = arguments {
             m.clone()
         } else {
             serde_json::Map::new()
         };
         let call_params = CallToolRequestParams {
-            name: self.tool_name.clone(),
+            name: self.tool_name.clone().into(),
             arguments: Some(args_map),
             meta: None,
             task: None,
         };
 
-        match client.request_tool_call(call_params).await {
+        match peer.call_tool(call_params).await {
             Ok(result) => {
                 let content = result
                     .content
                     .iter()
                     .filter_map(|c| {
-                        if let ContentBlock::TextContent(text) = c {
-                            Some(text.text.clone())
-                        } else {
-                            None
+                        match &c.raw {
+                            RawContent::Text(t) => Some(t.text.clone()),
+                            _ => None,
                         }
                     })
                     .collect::<Vec<_>>()
@@ -106,6 +101,7 @@ impl ToolActor for McpToolActor {
 }
 
 /// Handler for MCP client messages (empty - we don't need to handle incoming messages).
+#[derive(Clone)]
 pub struct McpClientHandler;
 
 impl ClientHandler for McpClientHandler {}
@@ -127,39 +123,15 @@ impl McpServerRunner {
         &self,
         _bus: &SarBus,
     ) -> std::result::Result<McpServerHandle, Box<dyn std::error::Error + Send + Sync>> {
-        let transport = StdioTransport::create_with_server_launch(
-            self.config.command[0].clone(),
-            self.config.command[1..].to_vec(),
-            None,
-            TransportOptions::default(),
-        )
-        .map_err(|e| format!("Failed to create MCP transport: {}", e))?;
-
-        let client_details = InitializeRequestParams {
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "sar-mcp-client".into(),
-                version: "0.1.0".into(),
-                description: None,
-                icons: vec![],
-                title: None,
-                website_url: None,
-            },
-            protocol_version: ProtocolVersion::V2025_11_25.into(),
-            meta: None,
+        let cmd = {
+            let mut c = tokio::process::Command::new(&self.config.command[0]);
+            c.args(&self.config.command[1..]);
+            c
         };
-
-        let options = McpClientOptions {
-            client_details,
-            transport,
-            handler: McpClientHandler.to_mcp_client_handler(),
-            task_store: None,
-            server_task_store: None,
-            message_observer: None,
-        };
-
-        let client = client_runtime::create_client(options);
-        client.clone().start().await.map_err(|e| format!("Failed to start MCP client: {}", e))?;
+        let transport = TokioChildProcess::builder(cmd).spawn()?.0;
+        let service = McpClientHandler;
+        let running_service: rmcp::service::RunningService<RoleClient, McpClientHandler> = rmcp::serve_client(service, transport).await?;
+        let peer = Arc::new(Mutex::new(running_service.peer().clone()));
 
         info!(
             "MCP server '{}' started, discovering tools...",
@@ -167,8 +139,7 @@ impl McpServerRunner {
         );
 
         // Discover tools
-        let tools_result = client.request_tool_list(None).await.map_err(|e| format!("Failed to list tools: {}", e))?;
-        let tools = tools_result.tools;
+        let tools: Vec<Tool> = peer.lock().await.list_all_tools().await?;
 
         info!(
             "MCP server '{}' exposed {} tools",
@@ -176,11 +147,9 @@ impl McpServerRunner {
             tools.len()
         );
 
-        let client = Arc::new(Mutex::new(client));
-
         Ok(McpServerHandle {
             prefix: self.prefix.clone(),
-            client,
+            peer,
             tools,
             default: self.config.default,
             expose: self.config.expose.clone(),
@@ -191,7 +160,7 @@ impl McpServerRunner {
 /// Handle to a running MCP server with discovered tools.
 pub struct McpServerHandle {
     prefix: String,
-    client: Arc<Mutex<Arc<ClientRuntime>>>,
+    peer: Arc<Mutex<rmcp::Peer<RoleClient>>>,
     tools: Vec<Tool>,
     default: bool,
     expose: Vec<String>,
@@ -202,11 +171,11 @@ impl McpServerHandle {
     pub fn create_tool_runners(&self, bus: &SarBus) -> Vec<JoinHandle<()>> {
         let mut handles = Vec::new();
 
-        let client = self.client.clone();
+        let peer = self.peer.clone();
         let prefix = self.prefix.clone();
 
         for tool in &self.tools {
-            let tool_actor = McpToolActor::new(tool, client.clone());
+            let tool_actor = McpToolActor::new(tool, peer.clone());
             let runner = ToolActorRunner::new(tool_actor);
             let bus = bus.clone();
             let tool_name_prefix = format!("{}:{}", prefix, tool.name);
@@ -220,6 +189,30 @@ impl McpServerHandle {
         }
 
         handles
+    }
+
+    /// Get tool actors for tools that should be exposed to the LLM.
+    /// These can be added to LlmTestLoopToolsActor via with_tool().
+    pub fn tool_actors(&self) -> Vec<std::sync::Arc<dyn ToolActor>> {
+        self.tools
+            .iter()
+            .filter(|t| {
+                let should_include = |name: &str| -> bool {
+                    if self.default {
+                        return true;
+                    }
+                    if !self.expose.is_empty() {
+                        return self.expose.contains(&name.to_string());
+                    }
+                    false
+                };
+                should_include(t.name.as_ref())
+            })
+            .map(|t| {
+                std::sync::Arc::new(McpToolActor::new(t, self.peer.clone()))
+                    as std::sync::Arc<dyn ToolActor>
+            })
+            .collect()
     }
 
     /// Get tool syntaxes for tools that should be exposed to the LLM.
@@ -243,37 +236,13 @@ impl McpServerHandle {
 
         self.tools
             .iter()
-            .filter(|t| should_include(&t.name))
+            .filter(|t| should_include(t.name.as_ref()))
             .map(|t| {
                 ToolSyntax::new(
-                    t.name.clone(),
-                    t.description.clone().unwrap_or_default(),
-                    serde_json::to_value(&t.input_schema).unwrap_or(serde_json::json!({})),
+                    t.name.as_ref().to_string(),
+                    t.description.as_ref().map(|s| s.as_ref().to_string()).unwrap_or_default(),
+                    tool_input_schema_to_json(&t.input_schema),
                 )
-            })
-            .collect()
-    }
-
-    /// Get tool actors for tools that should be exposed to the LLM.
-    /// These can be added to LlmTestLoopToolsActor via with_tool().
-    pub fn tool_actors(&self) -> Vec<std::sync::Arc<dyn ToolActor>> {
-        self.tools
-            .iter()
-            .filter(|t| {
-                let should_include = |name: &str| -> bool {
-                    if self.default {
-                        return true;
-                    }
-                    if !self.expose.is_empty() {
-                        return self.expose.contains(&name.to_string());
-                    }
-                    false
-                };
-                should_include(&t.name)
-            })
-            .map(|t| {
-                std::sync::Arc::new(McpToolActor::new(t, self.client.clone()))
-                    as std::sync::Arc<dyn ToolActor>
             })
             .collect()
     }
@@ -285,6 +254,16 @@ impl McpServerHandle {
 
     /// Get the list of tool names from this MCP server.
     pub fn tool_names(&self) -> Vec<String> {
-        self.tools.iter().map(|t| t.name.clone()).collect()
+        self.tools.iter().map(|t| t.name.as_ref().to_string()).collect()
+    }
+}
+
+impl From<sar_core::config::McpServerConfig> for McpServerConfig {
+    fn from(config: sar_core::config::McpServerConfig) -> Self {
+        Self {
+            command: config.command,
+            default: config.default,
+            expose: config.expose,
+        }
     }
 }

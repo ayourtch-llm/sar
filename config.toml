@@ -29,4 +29,4 @@ route_to = ["llm-test-tools:0:in"]
 
 [mcp_servers.find_files]
 command = ["/Users/ayourtch/rust/mcp-find-files/target/debug/mcp-find-files"]
-default = false
+default = true
