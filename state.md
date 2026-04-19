@@ -46,15 +46,24 @@ sar/
 ├── sar-llm-test-loop/  # LLM test loop actor (conversation loop)
 │   ├── Cargo.toml
 │   └── src/lib.rs
-└── sar-llm-test-loop-tools/  # LLM test loop with async tool execution
+├── sar-llm-test-loop-tools/  # LLM test loop with async tool execution
+│   ├── Cargo.toml
+│   ├── src/lib.rs          # LlmTestLoopToolsActor
+│   ├── src/main.rs         # standalone binary for tool testing
+│   ├── src/tool_actor_wrapper.rs  # Wrapper for legacy Tool trait
+│   └── tests/tool_actor_tests.rs
+├── sar-tool-actors/      # ToolActor trait, ToolActorRunner, message types
+│   ├── Cargo.toml
+│   └── src/lib.rs
+├── sar-tool-calculator/  # CalculatorTool implementation
+│   ├── Cargo.toml
+│   └── src/lib.rs
+├── sar-tool-sleep/       # SleepTool with cancel support
+│   ├── Cargo.toml
+│   └── src/lib.rs
+└── sar-tool-mcp/         # MCP server integration
     ├── Cargo.toml
-    ├── src/lib.rs          # LlmTestLoopToolsActor
-    ├── src/main.rs         # standalone binary for tool testing
-    ├── src/tool_actor.rs   # ToolActor trait, ToolActorRunner, message types
-    ├── src/calculator.rs   # CalculatorTool implementation
-    ├── src/sleep_tool.rs   # SleepTool with cancel support
-    ├── src/tool_actor_wrapper.rs  # Wrapper for legacy Tool trait
-    └── tests/tool_actor_tests.rs
+    └── src/lib.rs
 ```
 
 ## Architecture
@@ -170,6 +179,27 @@ pub struct Message {
 ### sar-llm-test-loop (sar-llm-test-loop/src/lib.rs)
 - LLM test loop actor that manages conversation flow
 - Handles LLM responses and tool calls
+
+### sar-tool-actors (sar-tool-actors/)
+- **ToolActor trait**: Object-safe trait for tool actors
+  - `tool_syntax()` — returns OpenAI-compatible function definition
+  - `execute_tool()` — runs the tool logic asynchronously
+  - `supports_cancel()` — whether the tool can be cancelled mid-execution
+- **ToolActorRunner**: Subscribes to `tool:{name}:execute`, spawns execution tasks, handles cancellation
+- **Message types**: `ToolExecuteMessage`, `ToolResultMessage`, `ToolCancelMessage`
+
+### sar-tool-calculator (sar-tool-calculator/)
+- **CalculatorTool**: Performs math operations (add, subtract, multiply, divide)
+
+### sar-tool-sleep (sar-tool-sleep/)
+- **SleepTool**: Sleeps for specified duration, `supports_cancel() = true`
+
+### sar-tool-mcp (sar-tool-mcp/)
+- Connects to stdio MCP servers, discovers their tools, exposes them as sar tools
+- **McpServerConfig**: Command, `default` flag, `expose` list for selective tool exposure
+- **McpServerRunner**: Spawns MCP server process, initializes client, discovers tools
+- **McpToolActor**: Wraps individual MCP tools as `ToolActor` implementations
+- **McpServerHandle**: Provides `create_tool_runners()` and `get_tool_syntaxes()`
 
 ### sar-llm-test-loop-tools (sar-llm-test-loop-tools/)
 - LLM test loop with fully-async tool execution
@@ -332,6 +362,18 @@ route_to = ["sar:llm-test:0:in"]
 ### sar-llm-test-loop-tools
 - sar-core, sar-llm, tokio, tracing, async-trait, serde, serde_json
 
+### sar-tool-actors
+- sar-core, tokio, tracing, async-trait, serde, serde_json
+
+### sar-tool-calculator
+- sar-core, sar-tool-actors, tokio, tracing, serde, serde_json
+
+### sar-tool-sleep
+- sar-core, sar-tool-actors, tokio, tracing, serde, serde_json
+
+### sar-tool-mcp
+- sar-core, sar-tool-actors, rust-mcp-sdk (client, stdio), tokio, tracing, serde, serde_json, async-trait, thiserror
+
 ### sar (binary)
 - All crates
 - clap 4 (derive), tokio, tracing, tracing-subscriber
@@ -375,6 +417,10 @@ cd sar-llm-test-loop-tools && cargo run
   - SleepTool execute tests (including zero duration, missing args)
   - SleepTool supports_cancel test
   - LlmTestLoopToolsActor tool management tests
+- **sar-ui-hub**: Continue detection tests
+  - `/continue` with reason → parsed correctly
+  - `/continue` bare → parsed correctly
+  - Non-continue messages → not matched
 
 ## Known Issues / Warnings
 
@@ -396,7 +442,7 @@ cd sar-llm-test-loop-tools && cargo run
   - `f3f99d1` - feat: fully-async tool execution model with independent tool actors
   - `f0a678b` - feat: add ToolActor trait for runtime tool management
   - `ab4c855` - initial commit with full project
-- Working tree: clean
+- Working tree: clean (changes not yet committed)
 
 ## What Was Built (Conversation History)
 1. User described the project vision
@@ -424,6 +470,17 @@ cd sar-llm-test-loop-tools && cargo run
 18. Implemented centralized continue/interrupt via user:control topic
 19. Simplified loop actor to only subscribe to tool:results (tool runner handles cancel)
 20. Fixed ContinueMessage deserialization issue (parse as Value instead)
+21. Extracted tool infrastructure into separate crates: sar-tool-actors, sar-tool-calculator, sar-tool-sleep
+22. Added /continue detection in UI hub with TDD tests
+23. Implemented sar-tool-mcp for MCP server integration:
+    - McpServerRunner spawns stdio MCP servers, discovers tools
+    - McpToolActor wraps MCP tools as ToolActor implementations
+    - McpServerHandle exposes create_tool_runners() and get_tool_syntaxes()
+    - Config-driven: command, default flag, expose list
+24. Fixed sar-tool-mcp compilation errors for rust-mcp-sdk v0.9.0 API:
+    - Use ToMcpClientHandler::to_mcp_client_handler() instead of Box::new()
+    - Clone Arc before calling start() (which consumes self)
+    - Import async_trait for #[async_trait] on ToolActor impl
 
 ## Key Technical Decisions
 - `tokio::sync::broadcast` channels for pub-sub (not mpsc, since multiple subscribers)
@@ -440,13 +497,13 @@ cd sar-llm-test-loop-tools && cargo run
 - **Message buffering**: User messages buffered while tools are pending, processed in order after resolution
 
 ## Potential Next Steps
-1. Add more actors (e.g., file watcher, HTTP client, etc.)
-2. Add tests for sar-llm and sar-llm-test
-3. Improve TUI (add more widgets, colors, keybindings)
-4. Add persistence (save log to file)
-5. Add more server endpoints (WebSocket for real-time log streaming)
-6. Add actor lifecycle management (restart on failure, health checks)
-7. Add metrics/monitoring
-8. Support loading actors dynamically via config
-9. Add message filtering/routing
-10. Support multiple TUI instances
+1. Integrate sar-tool-mcp into sar binary (config-driven MCP server spawning)
+2. Add tests for sar-tool-mcp (MCP server discovery, tool execution)
+3. Add more actors (e.g., file watcher, HTTP client, etc.)
+4. Add tests for sar-llm and sar-llm-test
+5. Improve TUI (add more widgets, colors, keybindings)
+6. Add persistence (save log to file)
+7. Add more server endpoints (WebSocket for real-time log streaming)
+8. Add actor lifecycle management (restart on failure, health checks)
+9. Add metrics/monitoring
+10. Support loading actors dynamically via config

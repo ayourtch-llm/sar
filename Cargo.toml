@@ -15,6 +15,7 @@ members = [
     "sar-tool-actors",
     "sar-tool-calculator",
     "sar-tool-sleep",
+    "sar-tool-mcp",
 ]
 resolver = "2"
 
@@ -42,6 +43,7 @@ sar-ui-hub = { path = "sar-ui-hub" }
 sar-tool-actors = { path = "sar-tool-actors" }
 sar-tool-calculator = { path = "sar-tool-calculator" }
 sar-tool-sleep = { path = "sar-tool-sleep" }
+sar-tool-mcp = { path = "sar-tool-mcp" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
