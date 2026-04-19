@@ -127,10 +127,10 @@ The built-in server runs as a detached task:
 
 ```bash
 curl http://127.0.0.1:3000/health
-curl http://127.0.0.1:3000/api/list/topics
-curl http://127.0.0.1:3000/api/list/actors
-curl http://127.0.0.1:3000/api/list/announced-topics
-curl -X POST http://127.0.0.1:3000/api/list/publish \
+curl http://127.0.0.1:3000/api/topics
+curl http://127.0.0.1:3000/api/actors
+curl http://127.0.0.1:3000/api/announced-topics
+curl -X POST http://127.0.0.1:3000/api/publish \
   -H "Content-Type: application/json" \
   -d '{"topic":"sar:input","source":"test","payload":"hello"}'
 ```

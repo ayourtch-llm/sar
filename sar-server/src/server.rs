@@ -159,11 +159,11 @@ pub async fn list_announced_topics(State(bus): State<SarBus>) -> Json<Vec<TopicA
 
 pub async fn run_server(bus: SarBus, host: String, port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = Router::new()
-        .route("/api/list/topics", get(list_topics))
-        .route("/api/list/actors", get(list_actors))
-        .route("/api/list/announced", get(list_announced_actors))
-        .route("/api/list/announced-topics", get(list_announced_topics))
-        .route("/api/list/publish", post(publish))
+        .route("/api/topics", get(list_topics))
+        .route("/api/actors", get(list_actors))
+        .route("/api/announced", get(list_announced_actors))
+        .route("/api/announced-topics", get(list_announced_topics))
+        .route("/api/publish", post(publish))
         .route("/health", get(health))
         .with_state(bus)
         .layer(CorsLayer::permissive());
