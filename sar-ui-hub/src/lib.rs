@@ -5,11 +5,16 @@ use sar_core::config::UiHubConfig;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
-const USER_CONTROL_TOPIC: &str = "user:control";
-const CONTINUE_PREFIX: &str = "/continue ";
+pub const USER_CONTROL_TOPIC: &str = "user:control";
 
-fn is_continue_message(input: &str) -> Option<String> {
-    input.strip_prefix(CONTINUE_PREFIX).map(|s| s.to_string())
+pub fn is_continue_message(input: &str) -> Option<String> {
+    if let Some(rest) = input.strip_prefix("/continue ") {
+        return Some(rest.to_string());
+    }
+    if input == "/continue" {
+        return Some("".to_string());
+    }
+    None
 }
 
 #[derive(Debug, Default)]
@@ -135,7 +140,7 @@ impl Actor for UiHubActor {
 
                     if let Some(reason) = is_continue_message(&payload_str) {
                         let control_msg = Message::new(
-                            USER_CONTROL_TOPIC,
+                            crate::USER_CONTROL_TOPIC,
                             &hub_id,
                             serde_json::json!({
                                 "type": "continue",
