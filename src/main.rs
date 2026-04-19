@@ -206,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut all_mcp_actors: Vec<std::sync::Arc<dyn ToolActor>> = Vec::new();
     for (name, mcp_config) in &config.mcp_servers {
         info!("Spawning MCP server '{}'", name);
-        let mcp_runner = McpServerRunner::new(name.clone(), mcp_config.clone().into());
+        let mcp_runner = McpServerRunner::new(name.clone(), mcp_config.clone());
         let handle = match mcp_runner.spawn(&bus).await {
             Ok(handle) => {
                 info!(
