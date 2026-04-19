@@ -79,9 +79,18 @@ const API_BASE = window.location.origin;
 let showPub = true, showSub = true, showLabels = true;
 let simulation, svg, g, linkSel, linkLabelSel, nodeSel, nodeLabelSel;
 let width, height;
-let dragstarted = (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; };
+let dragstarted = (e, d) => {
+  d.fx = d.x; d.fy = d.y;
+  if (!simulation.running) {
+    // Unfreeze all nodes and restart
+    for (const n of simulation.nodes()) { n.fx = null; n.fy = null; }
+    simulation.alpha(0.5).restart();
+  }
+};
 let dragged = (e, d) => { d.fx = e.x; d.fy = e.y; };
-let dragended = (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; };
+let dragended = (e, d) => {
+  d.fx = null; d.fy = null;
+};
 
 function shortenId(id) {
   if (id.startsWith('sar-')) return id.slice(4);
@@ -170,10 +179,41 @@ function initGraph() {
   g.append('g').attr('class', 'node-labels');
 
   simulation = d3.forceSimulation()
-    .force('link', d3.forceLink().id(d => d.id).distance(160))
-    .force('charge', d3.forceManyBody().strength(-600))
-    .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collision', d3.forceCollide().radius(50));
+    .force('link', d3.forceLink().id(d => d.id).distance(250).strength(0.3))
+    .force('charge', d3.forceManyBody().strength(-1500))
+    .force('collision', d3.forceCollide().radius(100).strength(0.8))
+    .alpha(0.1)
+    .velocityDecay(0.8);
+
+  let tickCount = 0;
+  simulation.on('tick', () => {
+    if (linkSel) {
+      linkSel.attr('x1', d => d.source.x ?? 0)
+        .attr('y1', d => d.source.y ?? 0)
+        .attr('x2', d => d.target.x ?? 0)
+        .attr('y2', d => d.target.y ?? 0);
+    }
+    if (linkLabelSel) {
+      linkLabelSel.attr('x', d => ((d.source.x ?? 0) + (d.target.x ?? 0)) / 2)
+        .attr('y', d => ((d.source.y ?? 0) + (d.target.y ?? 0)) / 2 - 5);
+    }
+    if (nodeSel) {
+      nodeSel.attr('transform', d => `translate(${d.x ?? 0},${d.y ?? 0})`);
+    }
+    if (nodeLabelSel) {
+      nodeLabelSel.attr('x', d => d.x ?? 0)
+        .attr('y', d => (d.y ?? 0) + (d.type === 'topic' ? 28 : 22));
+    }
+    tickCount++;
+    // Stop after 300 ticks and freeze all nodes
+    if (tickCount > 300) {
+      simulation.stop();
+      for (const n of simulation.nodes()) {
+        n.fx = n.x;
+        n.fy = n.y;
+      }
+    }
+  });
 
   svg.call(d3.zoom()
     .scaleExtent([0.2, 4])
@@ -200,7 +240,7 @@ function initGraph() {
   });
 }
 
-function updateGraph(data) {
+function updateGraph(data, initial = false) {
   const graph = buildGraph(data);
 
   linkSel = g.select('.links').selectAll('.link')
@@ -258,16 +298,20 @@ function updateGraph(data) {
     .text(d => d.name)
     .merge(nodeLabelSel);
 
-  // Give nodes initial positions so labels are visible immediately
-  for (const n of graph.nodes) {
-    n.x = width / 2 + (Math.random() - 0.5) * 300;
-    n.y = height / 2 + (Math.random() - 0.5) * 300;
-  }
+  if (initial) {
+    // Give nodes initial positions so labels are visible immediately
+    for (const n of graph.nodes) {
+      n.x = width / 2 + (Math.random() - 0.5) * 300;
+      n.y = height / 2 + (Math.random() - 0.5) * 300;
+    }
 
-  simulation.nodes(graph.nodes);
-  simulation.force('link').links(graph.links);
-  simulation.alpha(1);
-  simulation.restart();
+    simulation.nodes(graph.nodes);
+    simulation.force('link').links(graph.links);
+    simulation.alpha(0.3);
+  } else {
+    // Refresh: only update links, preserve node positions
+    simulation.force('link').links(graph.links);
+  }
 
   linkSel.style('display', d => {
     if (d.type === 'publish' && !showPub) return 'none';
@@ -290,16 +334,7 @@ function updateGraph(data) {
 async function main() {
   initGraph();
   const data = await loadData();
-  updateGraph(data);
-
-  setInterval(async () => {
-    try {
-      const data = await loadData();
-      updateGraph(data);
-    } catch (e) {
-      console.error('Failed to refresh:', e);
-    }
-  }, 3000);
+  updateGraph(data, true);
 }
 
 document.getElementById('btn-pub').addEventListener('click', function() {
