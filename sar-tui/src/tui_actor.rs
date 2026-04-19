@@ -18,7 +18,8 @@ use tracing::{error, info, warn};
 
 const APP_ID: &str = "sar-tui";
 const LIGHT_GRAY: Color = Color::Rgb(211, 211, 211);
-const PAGE_SIZE: usize = 10;
+const PAGE_SIZE: usize = 5;
+const MOUSE_SCROLL_AMOUNT: usize = 2;
 const BOTTOM_PAGE_SIZE: usize = 1;
 
 #[derive(Debug, Default)]
@@ -460,16 +461,16 @@ impl Actor for TuiActor {
                         match mouse.kind {
                             MouseEventKind::ScrollUp => {
                                 state.at_bottom = false;
-                                if state.scroll >= PAGE_SIZE {
-                                    state.scroll -= PAGE_SIZE;
+                                if state.scroll >= MOUSE_SCROLL_AMOUNT {
+                                    state.scroll -= MOUSE_SCROLL_AMOUNT;
                                 } else {
                                     state.scroll = 0;
                                 }
                             }
                             MouseEventKind::ScrollDown => {
                                 let max_scroll = state.max_scroll(snapshot.visible_lines);
-                                if state.scroll + PAGE_SIZE <= max_scroll {
-                                    state.scroll += PAGE_SIZE;
+                                if state.scroll + MOUSE_SCROLL_AMOUNT <= max_scroll {
+                                    state.scroll += MOUSE_SCROLL_AMOUNT;
                                 } else {
                                     state.scroll = max_scroll;
                                 }
