@@ -375,8 +375,16 @@ impl Actor for LlmActor {
                                             }
                                             info!("[llm{}] Request handle fully resolved", self.index);
                                         }
-                                        info!("[llm{}] Returning interrupt error", self.index);
-                                        return Err(format!("Interrupted: {}", reason).into());
+                                        info!("[llm{}] Publishing interrupt error to output topic", self.index);
+                                        let error_msg = Message::new(
+                                            &self.output_topic,
+                                            &self.id(),
+                                            format!("Interrupted: {}", reason),
+                                        );
+                                        if let Err(e) = bus.publish(&self.id(), error_msg).await {
+                                            error!("[llm{}] Failed to publish interrupt error: {}", self.index, e);
+                                        }
+                                        info!("[llm{}] Interrupt error published, continuing to listen", self.index);
                                     }
                                 }
                             }
@@ -472,8 +480,16 @@ impl Actor for LlmActor {
                                             let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("interrupted");
                                             info!("[llm{}] Processing interrupt, reason='{}'", self.index, reason);
                                             info!("[llm{}] No active request to abort", self.index);
-                                            info!("[llm{}] Returning interrupt error", self.index);
-                                            return Err(format!("Interrupted: {}", reason).into());
+                                            info!("[llm{}] Publishing interrupt error to output topic", self.index);
+                                            let error_msg = Message::new(
+                                                &self.output_topic,
+                                                &self.id(),
+                                                format!("Interrupted: {}", reason),
+                                            );
+                                            if let Err(e) = bus.publish(&self.id(), error_msg).await {
+                                                error!("[llm{}] Failed to publish interrupt error: {}", self.index, e);
+                                            }
+                                            info!("[llm{}] Interrupt error published, continuing to listen", self.index);
                                         }
                                     }
                                 }
