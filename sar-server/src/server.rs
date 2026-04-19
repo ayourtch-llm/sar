@@ -1,6 +1,7 @@
 use axum::{
     extract::State,
     http::StatusCode,
+    response::Html,
     Json,
     routing::{get, post},
     Router,
@@ -9,6 +10,8 @@ use sar_core::bus::SarBus;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use tracing::{info, error};
+
+const INDEX_HTML: &str = include_str!("index.html");
 
 #[derive(Debug, Serialize)]
 pub struct ActorInfoResponse {
@@ -117,6 +120,10 @@ pub async fn health() -> &'static str {
     "ok"
 }
 
+pub async fn index() -> Html<&'static str> {
+    Html(INDEX_HTML)
+}
+
 pub async fn list_actors(State(bus): State<SarBus>) -> Json<Vec<ActorInfoResponse>> {
     let announced = bus.list_announced_actors().await;
     let announced_map: std::collections::HashMap<String, _> = announced.into_iter().map(|a| (a.id.clone(), a)).collect();
@@ -159,6 +166,7 @@ pub async fn list_announced_topics(State(bus): State<SarBus>) -> Json<Vec<TopicA
 
 pub async fn run_server(bus: SarBus, host: String, port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = Router::new()
+        .route("/", get(index))
         .route("/api/topics", get(list_topics))
         .route("/api/actors", get(list_actors))
         .route("/api/announced", get(list_announced_actors))

@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SAR Actor Graph</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0d1117;
+    color: #c9d1d9;
+    overflow: hidden;
+  }
+  #header {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 12px 20px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  #header h1 { font-size: 16px; font-weight: 600; color: #58a6ff; }
+  #header .controls { display: flex; gap: 12px; align-items: center; }
+  #header button {
+    background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
+    padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
+  }
+  #header button:hover { background: #30363d; }
+  #header button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  #legend {
+    position: fixed; top: 60px; right: 16px; z-index: 10;
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 12px 16px; font-size: 12px;
+  }
+  #legend div { margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+  #legend .shape { display: inline-block; }
+  #legend .rect { width: 24px; height: 14px; border-radius: 2px; }
+  #legend .ellipse { width: 24px; height: 14px; border-radius: 50%; }
+  #legend .arrow { width: 24px; height: 2px; position: relative; }
+  #legend .arrow::after {
+    content: ''; position: absolute; right: -2px; top: -4px;
+    border: 5px solid transparent; border-left: 6px solid #8b949e;
+  }
+  #legend .arrow.reverse::after { left: -2px; right: auto; border-left: none; border-right: 6px solid #8b949e; }
+  svg { width: 100vw; height: 100vh; }
+  .link { stroke-width: 1.5; fill: none; }
+  .link.publish { stroke: #3fb950; }
+  .link.subscribe { stroke: #d29922; }
+  .link-label { font-size: 10px; fill: #8b949e; pointer-events: none; text-anchor: middle; }
+  .node-label { font-size: 11px; fill: #ffffff; pointer-events: none; text-anchor: middle; font-weight: 500; }
+  .node-rect { fill: #1f6feb; stroke: #58a6ff; stroke-width: 1.5; rx: 4; ry: 4; }
+  .node-ellipse { fill: #238636; stroke: #3fb950; stroke-width: 1.5; }
+  .link-arrow-pub { fill: #3fb950; }
+  .link-arrow-sub { fill: #d29922; }
+  #status { font-size: 11px; color: #8b949e; }
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>SAR Actor Graph</h1>
+  <div class="controls">
+    <button id="btn-pub" class="active">Publish</button>
+    <button id="btn-sub" class="active">Subscribe</button>
+    <button id="btn-labels" class="active">Labels</button>
+    <span id="status">Loading...</span>
+  </div>
+</div>
+<div id="legend">
+  <div><span class="shape rect" style="background:#1f6feb;border:1px solid #58a6ff"></span> Actor</div>
+  <div><span class="shape ellipse" style="background:#238636;border:1px solid #3fb950"></span> Topic</div>
+  <div><span class="shape" style="width:24px;height:2px;background:#3fb950;position:relative"><span style="position:absolute;right:-4px;top:-4px;border:5px solid transparent;border-left:6px solid #3fb950"></span></span> Publishes to</div>
+  <div><span class="shape" style="width:24px;height:2px;background:#d29922;position:relative"><span style="position:absolute;left:-4px;top:-4px;border:5px solid transparent;border-right:6px solid #d29922"></span></span> Subscribes to</div>
+</div>
+<svg id="graph"></svg>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+const API_BASE = window.location.origin;
+let showPub = true, showSub = true, showLabels = true;
+let simulation, svg, g, linkSel, linkLabelSel, nodeSel, nodeLabelSel;
+let width, height;
+let dragstarted = (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; };
+let dragged = (e, d) => { d.fx = e.x; d.fy = e.y; };
+let dragended = (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; };
+
+function shortenId(id) {
+  if (id.startsWith('sar-')) return id.slice(4);
+  if (id.startsWith('tool-')) return id.slice(5);
+  if (id.startsWith('mcp-')) return id.slice(4);
+  return id;
+}
+
+async function loadData() {
+  const [actorsRes, topicsRes] = await Promise.all([
+    fetch(`${API_BASE}/api/actors`),
+    fetch(`${API_BASE}/api/announced-topics`)
+  ]);
+  const actors = await actorsRes.json();
+  const topics = await topicsRes.json();
+  return { actors, topics };
+}
+
+function buildGraph(data) {
+  const nodes = [];
+  const links = [];
+  const nodeMap = new Map();
+
+  for (const t of data.topics) {
+    const n = { id: t.name, type: 'topic', name: t.name };
+    nodes.push(n);
+    nodeMap.set(t.name, n);
+  }
+
+  for (const a of data.actors) {
+    const n = { id: a.id, type: 'actor', name: shortenId(a.id) };
+    nodes.push(n);
+    nodeMap.set(a.id, n);
+
+    for (const pub of a.publications) {
+      if (nodeMap.has(pub)) {
+        links.push({ source: a.id, target: pub, type: 'publish' });
+      }
+    }
+    for (const sub of a.subscriptions) {
+      if (nodeMap.has(sub)) {
+        links.push({ source: sub, target: a.id, type: 'subscribe' });
+      }
+    }
+  }
+
+  return { nodes, links };
+}
+
+function initGraph() {
+  width = window.innerWidth;
+  height = window.innerHeight - 50;
+
+  svg = d3.select('#graph')
+    .attr('width', width)
+    .attr('height', height);
+
+  svg.append('defs').append('marker')
+    .attr('id', 'arrow-pub')
+    .attr('viewBox', '0 -5 10 10')
+    .attr('refX', 28)
+    .attr('refY', 0)
+    .attr('markerWidth', 6)
+    .attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-5L10,0L0,5')
+    .attr('class', 'link-arrow-pub');
+
+  svg.append('defs').append('marker')
+    .attr('id', 'arrow-sub')
+    .attr('viewBox', '0 -5 10 10')
+    .attr('refX', 28)
+    .attr('refY', 0)
+    .attr('markerWidth', 6)
+    .attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-5L10,0L0,5')
+    .attr('class', 'link-arrow-sub');
+
+  g = svg.append('g');
+  g.append('g').attr('class', 'links');
+  g.append('g').attr('class', 'link-labels');
+  g.append('g').attr('class', 'nodes');
+  g.append('g').attr('class', 'node-labels');
+
+  simulation = d3.forceSimulation()
+    .force('link', d3.forceLink().id(d => d.id).distance(160))
+    .force('charge', d3.forceManyBody().strength(-600))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collision', d3.forceCollide().radius(50));
+
+  svg.call(d3.zoom()
+    .scaleExtent([0.2, 4])
+    .on('zoom', (event) => g.attr('transform', event.transform)));
+
+  simulation.on('tick', () => {
+    if (linkSel) {
+      linkSel.attr('x1', d => d.source.x ?? 0)
+        .attr('y1', d => d.source.y ?? 0)
+        .attr('x2', d => d.target.x ?? 0)
+        .attr('y2', d => d.target.y ?? 0);
+    }
+    if (linkLabelSel) {
+      linkLabelSel.attr('x', d => ((d.source.x ?? 0) + (d.target.x ?? 0)) / 2)
+        .attr('y', d => ((d.source.y ?? 0) + (d.target.y ?? 0)) / 2 - 5);
+    }
+    if (nodeSel) {
+      nodeSel.attr('transform', d => `translate(${d.x ?? 0},${d.y ?? 0})`);
+    }
+    if (nodeLabelSel) {
+      nodeLabelSel.attr('x', d => d.x ?? 0)
+        .attr('y', d => (d.y ?? 0) + (d.type === 'topic' ? 28 : 22));
+    }
+  });
+}
+
+function updateGraph(data) {
+  const graph = buildGraph(data);
+
+  linkSel = g.select('.links').selectAll('.link')
+    .data(graph.links, d => `${d.source.id || d.source}-${d.type}-${d.target.id || d.target}`);
+
+  linkSel.exit().remove();
+
+  const linkEnter = linkSel.enter().append('line')
+    .attr('class', d => `link ${d.type}`)
+    .attr('marker-end', d => d.type === 'publish' ? 'url(#arrow-pub)' : 'url(#arrow-sub)');
+
+  const linkMerge = linkEnter.merge(linkSel);
+  linkSel = linkMerge;
+
+  linkLabelSel = g.select('.link-labels').selectAll('.link-label')
+    .data(graph.links, d => `${d.source.id || d.source}-${d.type}-${d.target.id || d.target}`);
+
+  linkLabelSel.exit().remove();
+
+  linkLabelSel = linkLabelSel.enter().append('text')
+    .attr('class', 'link-label')
+    .text(d => d.type === 'publish' ? '→' : '←')
+    .merge(linkLabelSel);
+
+  nodeSel = g.select('.nodes').selectAll('.node')
+    .data(graph.nodes, d => d.id);
+
+  nodeSel.exit().remove();
+
+  const nodeEnter = nodeSel.enter().append('g')
+    .attr('class', 'node')
+    .call(d3.drag()
+      .on('start', dragstarted)
+      .on('drag', dragged)
+      .on('end', dragended));
+
+  nodeEnter.filter(d => d.type === 'actor')
+    .append('rect').attr('class', 'node-rect')
+    .attr('width', 100).attr('height', 30).attr('x', -50).attr('y', -15);
+
+  nodeEnter.filter(d => d.type === 'topic')
+    .append('ellipse').attr('class', 'node-ellipse')
+    .attr('rx', 40).attr('ry', 16);
+
+  const nodeMerge = nodeEnter.merge(nodeSel);
+  nodeSel = nodeMerge;
+
+  nodeLabelSel = g.select('.node-labels').selectAll('.node-label')
+    .data(graph.nodes, d => d.id);
+
+  nodeLabelSel.exit().remove();
+
+  nodeLabelSel = nodeLabelSel.enter().append('text')
+    .attr('class', 'node-label')
+    .text(d => d.name)
+    .merge(nodeLabelSel);
+
+  // Give nodes initial positions so labels are visible immediately
+  for (const n of graph.nodes) {
+    n.x = width / 2 + (Math.random() - 0.5) * 300;
+    n.y = height / 2 + (Math.random() - 0.5) * 300;
+  }
+
+  simulation.nodes(graph.nodes);
+  simulation.force('link').links(graph.links);
+  simulation.alpha(1);
+  simulation.restart();
+
+  linkSel.style('display', d => {
+    if (d.type === 'publish' && !showPub) return 'none';
+    if (d.type === 'subscribe' && !showSub) return 'none';
+    return 'block';
+  });
+
+  linkLabelSel.style('display', d => {
+    if (d.type === 'publish' && !showPub) return 'none';
+    if (d.type === 'subscribe' && !showSub) return 'none';
+    return showLabels ? 'block' : 'none';
+  });
+
+  nodeLabelSel.style('display', showLabels ? 'block' : 'none');
+
+  document.getElementById('status').textContent =
+    `${graph.nodes.length} nodes, ${graph.links.length} connections`;
+}
+
+async function main() {
+  initGraph();
+  const data = await loadData();
+  updateGraph(data);
+
+  setInterval(async () => {
+    try {
+      const data = await loadData();
+      updateGraph(data);
+    } catch (e) {
+      console.error('Failed to refresh:', e);
+    }
+  }, 3000);
+}
+
+document.getElementById('btn-pub').addEventListener('click', function() {
+  showPub = !showPub;
+  this.classList.toggle('active', showPub);
+  loadData().then(updateGraph);
+});
+
+document.getElementById('btn-sub').addEventListener('click', function() {
+  showSub = !showSub;
+  this.classList.toggle('active', showSub);
+  loadData().then(updateGraph);
+});
+
+document.getElementById('btn-labels').addEventListener('click', function() {
+  showLabels = !showLabels;
+  this.classList.toggle('active', showLabels);
+  loadData().then(updateGraph);
+});
+
+window.addEventListener('resize', () => {
+  width = window.innerWidth;
+  height = window.innerHeight - 50;
+  svg.attr('width', width).attr('height', height);
+  simulation.force('center', d3.forceCenter(width / 2, height / 2));
+  simulation.alpha(0.3);
+  simulation.restart();
+});
+
+main();
+</script>
+</body>
+</html>
