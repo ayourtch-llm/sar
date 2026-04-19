@@ -38,7 +38,7 @@ impl<'a> MakeWriter<'a> for LogWriter {
                     Err(e) => panic!("Failed to open log file '{}': {}", path.display(), e),
                 }
             }
-            None => Box::new(std::io::stderr()),
+            None => Box::new(std::io::sink()),
         }
     }
 }
