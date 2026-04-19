@@ -5,6 +5,7 @@ use sar_core::config::LlmConfig;
 use sar_core::message::Message;
 use sar_llm::LlmRequest;
 use crate::tool_actor::ToolResultMessage;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::error::RecvError;
@@ -235,7 +236,7 @@ impl Actor for LlmTestLoopToolsActor {
             self.tools.lock().unwrap().len()
         );
 
-        let mut pending_count: usize = 0;
+        let mut pending_tool_calls: HashSet<String> = HashSet::new();
 
         loop {
             tokio::select! {
@@ -367,13 +368,13 @@ impl Actor for LlmTestLoopToolsActor {
                                 }));
                             }
 
-                            // Track pending tool calls
-                            pending_count = tool_calls.len();
-
+                            // Track pending tool calls by ID
                             for tc in &tool_calls {
+                                let tool_call_id = tc["id"].as_str().unwrap_or("");
+                                pending_tool_calls.insert(tool_call_id.to_string());
+
                                 let func_name = tc["function"]["name"].as_str().unwrap_or("");
                                 let func_args_str = tc["function"]["arguments"].as_str().unwrap_or("");
-                                let tool_call_id = tc["id"].as_str().unwrap_or("");
 
                                 info!("LLM test loop tools actor {} publishing tool call: {}({})", self.index, func_name, func_args_str);
 
@@ -382,6 +383,7 @@ impl Actor for LlmTestLoopToolsActor {
                                     Err(e) => {
                                         error!("Failed to parse tool arguments for {}: {}", func_name, e);
                                         // Publish error result directly to tool:results
+                                        pending_tool_calls.remove(tool_call_id);
                                         let error_result = ToolResultMessage {
                                             tool_call_id: tool_call_id.to_string(),
                                             tool_name: func_name.to_string(),
@@ -395,7 +397,6 @@ impl Actor for LlmTestLoopToolsActor {
                                             serde_json::to_value(&error_result).unwrap(),
                                         );
                                         let _ = bus.publish(&self.id(), result_msg).await;
-                                        pending_count -= 1;
                                         continue;
                                     }
                                 };
@@ -491,9 +492,9 @@ impl Actor for LlmTestLoopToolsActor {
                                 }
                             }
 
-                            pending_count -= 1;
+                            pending_tool_calls.remove(&tool_result.tool_call_id);
 
-                            if pending_count == 0 {
+                            if pending_tool_calls.is_empty() {
                                 info!("LLM test loop tools actor {} all tool calls resolved, sending conversation back to LLM, message count: {}", self.index, conversation_messages.lock().await.len());
                                 if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
                                     error!("Failed to send tool results to LLM: {}", e);
