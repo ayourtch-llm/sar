@@ -77,8 +77,8 @@ impl LlmTestLoopToolsActor {
         self
     }
 
-    pub async fn add_tool(&self, tool: impl ToolActor + 'static) {
-        self.tools.lock().unwrap().push(Arc::new(tool));
+    pub async fn add_tool_arc(&self, tool: Arc<dyn ToolActor>) {
+        self.tools.lock().unwrap().push(tool);
     }
 
     pub async fn remove_tool(&self, name: &str) {

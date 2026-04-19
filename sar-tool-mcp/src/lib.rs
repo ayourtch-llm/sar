@@ -9,6 +9,16 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
 
+impl From<sar_core::config::McpServerConfig> for McpServerConfig {
+    fn from(config: sar_core::config::McpServerConfig) -> Self {
+        Self {
+            command: config.command,
+            default: config.default,
+            expose: config.expose,
+        }
+    }
+}
+
 /// Configuration for a single MCP server.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct McpServerConfig {
@@ -240,6 +250,30 @@ impl McpServerHandle {
                     t.description.clone().unwrap_or_default(),
                     serde_json::to_value(&t.input_schema).unwrap_or(serde_json::json!({})),
                 )
+            })
+            .collect()
+    }
+
+    /// Get tool actors for tools that should be exposed to the LLM.
+    /// These can be added to LlmTestLoopToolsActor via with_tool().
+    pub fn tool_actors(&self) -> Vec<std::sync::Arc<dyn ToolActor>> {
+        self.tools
+            .iter()
+            .filter(|t| {
+                let should_include = |name: &str| -> bool {
+                    if self.default {
+                        return true;
+                    }
+                    if !self.expose.is_empty() {
+                        return self.expose.contains(&name.to_string());
+                    }
+                    false
+                };
+                should_include(&t.name)
+            })
+            .map(|t| {
+                std::sync::Arc::new(McpToolActor::new(t, self.client.clone()))
+                    as std::sync::Arc<dyn ToolActor>
             })
             .collect()
     }

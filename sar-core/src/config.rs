@@ -15,6 +15,8 @@ pub struct Config {
     pub llm: LlmConfig,
     #[serde(default)]
     pub ui_hubs: HashMap<String, UiHubConfig>,
+    #[serde(default)]
+    pub mcp_servers: HashMap<String, McpServerConfig>,
 }
 
 impl Default for Config {
@@ -40,6 +42,7 @@ impl Default for Config {
             ui: UiConfig::default(),
             llm: LlmConfig::default(),
             ui_hubs: hubs,
+            mcp_servers: HashMap::new(),
         }
     }
 }
@@ -172,6 +175,15 @@ impl Default for UiHubConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpServerConfig {
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub default: bool,
+    #[serde(default)]
+    pub expose: Vec<String>,
+}
+
 fn default_log_topic() -> String {
     "sar:log".to_string()
 }
@@ -272,6 +284,12 @@ impl Config {
             hubs_table.as_table_mut().unwrap().insert(name.clone(), to_toml_value(hub));
         }
         root.as_table_mut().unwrap().insert("ui_hubs".to_string(), hubs_table);
+
+        let mut mcp_table = toml::Value::Table(toml::map::Map::new());
+        for (name, server) in &self.mcp_servers {
+            mcp_table.as_table_mut().unwrap().insert(name.clone(), to_toml_value(server));
+        }
+        root.as_table_mut().unwrap().insert("mcp_servers".to_string(), mcp_table);
 
         toml::to_string_pretty(&root)
             .map_err(|e| ConfigError::SerializeFailed(e.to_string()))

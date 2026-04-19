@@ -8,8 +8,9 @@ use sar_core::{Config, SarBus};
 use sar_llm::LlmActor;
 use sar_llm_test_loop::LlmTestLoopActor;
 use sar_llm_test_loop_tools::LlmTestLoopToolsActor;
-use sar_tool_actors::ToolActorRunner;
+use sar_tool_actors::{ToolActor, ToolActorRunner};
 use sar_tool_calculator::CalculatorTool;
+use sar_tool_mcp::McpServerRunner;
 use sar_tool_sleep::SleepTool;
 use sar_ui_hub::UiHubActor;
 use tracing::{error, info};
@@ -201,7 +202,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     });
 
-    // Spawn LLM test loop tools actor
+    // Spawn MCP servers and their tool runners
+    let mut all_mcp_actors: Vec<std::sync::Arc<dyn ToolActor>> = Vec::new();
+    for (name, mcp_config) in &config.mcp_servers {
+        info!("Spawning MCP server '{}'", name);
+        let mcp_runner = McpServerRunner::new(name.clone(), mcp_config.clone().into());
+        let bus_for_mcp = bus.clone();
+        let handle = match mcp_runner.spawn(&bus_for_mcp).await {
+            Ok(handle) => {
+                info!(
+                    "MCP server '{}' discovered {} tools",
+                    name,
+                    handle.tool_names().join(", ")
+                );
+                handle
+            }
+            Err(e) => {
+                error!("Failed to spawn MCP server '{}': {}", name, e);
+                continue;
+            }
+        };
+
+        // Add MCP tool actors to the loop actor
+        all_mcp_actors.extend(handle.tool_actors());
+
+        // Spawn tool runners for this MCP server
+        let mcp_bus = bus.clone();
+        let tool_handles = handle.create_tool_runners(&mcp_bus);
+        for handle in tool_handles {
+            tokio::spawn(async move {
+                if let Err(e) = handle.await {
+                    error!("MCP tool runner failed: {}", e);
+                }
+            });
+        }
+    }
+
+    // Build tool list: built-in tools + MCP tools
     let llm_test_tools_actor = LlmTestLoopToolsActor::new(
         0,
         "llm-test-tools:0:in".to_string(),
@@ -213,6 +250,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     )
     .with_tool(CalculatorTool::new())
     .with_tool(SleepTool::new());
+
+    for actor in all_mcp_actors {
+        let name = actor.tool_syntax().name.clone();
+        info!("Adding MCP tool to LLM loop: {}", name);
+        llm_test_tools_actor.add_tool_arc(actor).await;
+    }
+
     (*bus).spawn_actor(llm_test_tools_actor).await?;
 
     // Spawn server (detached - runs in background)

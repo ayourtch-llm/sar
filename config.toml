@@ -26,3 +26,7 @@ input_topic = "ui:input"
 buffer_size = 1000
 subscribe_to = ["sar:echo", "sar:reverse", "llm-test-tools:0:stream", "llm:0:stats"]
 route_to = ["llm-test-tools:0:in"]
+
+[mcp_servers.find_files]
+command = ["/Users/ayourtch/rust/mcp-find-files/target/debug/mcp-find-files"]
+default = false
