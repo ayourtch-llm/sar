@@ -17,6 +17,8 @@ pub struct Config {
     pub ui_hubs: HashMap<String, UiHubConfig>,
     #[serde(default)]
     pub mcp_servers: HashMap<String, McpServerConfig>,
+    #[serde(default = "default_system_message")]
+    pub system_message: SystemMessageConfig,
 }
 
 impl Default for Config {
@@ -43,6 +45,7 @@ impl Default for Config {
             llm: LlmConfig::default(),
             ui_hubs: hubs,
             mcp_servers: HashMap::new(),
+            system_message: default_system_message(),
         }
     }
 }
@@ -184,6 +187,29 @@ pub struct McpServerConfig {
     pub expose: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SystemMessageConfig {
+    #[serde(default = "default_system_message_value")]
+    pub message: String,
+    #[serde(default = "default_system_message_edit")]
+    pub allow_edit: bool,
+}
+
+fn default_system_message() -> SystemMessageConfig {
+    SystemMessageConfig {
+        message: default_system_message_value(),
+        allow_edit: default_system_message_edit(),
+    }
+}
+
+fn default_system_message_value() -> String {
+    "You are a helpful assistant.".to_string()
+}
+
+fn default_system_message_edit() -> bool {
+    true
+}
+
 fn default_log_topic() -> String {
     "sar:log".to_string()
 }
@@ -290,6 +316,11 @@ impl Config {
             mcp_table.as_table_mut().unwrap().insert(name.clone(), to_toml_value(server));
         }
         root.as_table_mut().unwrap().insert("mcp_servers".to_string(), mcp_table);
+
+        root.as_table_mut().unwrap().insert(
+            "system_message".to_string(),
+            to_toml_value(&self.system_message),
+        );
 
         toml::to_string_pretty(&root)
             .map_err(|e| ConfigError::SerializeFailed(e.to_string()))

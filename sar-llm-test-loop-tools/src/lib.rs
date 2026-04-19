@@ -18,6 +18,9 @@ pub use sar_tool_sleep::SleepTool;
 pub mod tool_actor_wrapper;
 pub use tool_actor_wrapper::ToolActorWrapper;
 
+pub mod system_message_tools;
+pub use system_message_tools::{ReadSystemMessageTool, WriteSystemMessageTool};
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
@@ -39,6 +42,7 @@ pub struct LlmTestLoopToolsActor {
     pub stream_output_topic: String,
     pub llm_base_url: String,
     pub tools: StdMutex<Vec<Arc<dyn ToolActor>>>,
+    pub system_message: Arc<StdMutex<String>>,
 }
 
 impl LlmTestLoopToolsActor {
@@ -61,11 +65,24 @@ impl LlmTestLoopToolsActor {
             stream_output_topic,
             llm_base_url: String::new(),
             tools: StdMutex::new(Vec::new()),
+            system_message: Arc::new(StdMutex::new(String::new())),
         }
     }
 
     pub fn with_base_url(mut self, base_url: String) -> Self {
         self.llm_base_url = base_url;
+        self
+    }
+
+    pub fn with_system_message(message: String) -> Self {
+        Self {
+            system_message: Arc::new(StdMutex::new(message)),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_system_message_arc(mut self, message: Arc<StdMutex<String>>) -> Self {
+        self.system_message = message;
         self
     }
 
@@ -102,6 +119,15 @@ impl LlmTestLoopToolsActor {
                 dump.push_str(&format!("    {}\n", desc));
             }
             dump.push('\n');
+        }
+
+        let system_message = {
+            let guard = self.system_message.lock().unwrap();
+            guard.clone()
+        };
+        if !system_message.is_empty() {
+            dump.push_str("System Message:\n");
+            dump.push_str(&format!("{}\n\n", system_message));
         }
 
         dump.push_str("Messages:\n");
@@ -149,11 +175,27 @@ impl LlmTestLoopToolsActor {
         messages: &[serde_json::Value],
         tool_defs: &[serde_json::Value],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Get system message first, releasing the lock before any await
+        let system_message = {
+            let guard = self.system_message.lock().unwrap();
+            guard.clone()
+        };
+        
+        // Build the final messages array with system message prepended
+        let mut final_messages = Vec::new();
+        if !system_message.is_empty() {
+            final_messages.push(serde_json::json!({
+                "role": "system",
+                "content": system_message
+            }));
+        }
+        final_messages.extend(messages.iter().cloned());
+
         let llm_request = LlmRequest {
-            messages: if messages.is_empty() {
+            messages: if final_messages.is_empty() {
                 None
             } else {
-                Some(messages.to_vec())
+                Some(final_messages)
             },
             prompt: String::new(),
             config: if self.llm_base_url.is_empty() {
