@@ -215,6 +215,7 @@ impl Actor for TuiActor {
                     .begin_symbol(Some("↑"))
                     .end_symbol(Some("↓"));
                 let mut scrollbar_state = ScrollbarState::new(snapshot.total_lines)
+                    .viewport_content_length(snapshot.visible_lines)
                     .position(snapshot.scroll);
                 frame.render_stateful_widget(scrollbar, chunks[0], &mut scrollbar_state);
 
