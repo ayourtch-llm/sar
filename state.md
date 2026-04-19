@@ -1,7 +1,7 @@
 # SAR Project State
 
 ## Project Overview
-Simple Agent in Rust (sar) - a workspace-based project with a central pub-sub bus, pluggable actors, and multiple components.
+Simple Agent in Rust (sar) - a workspace-based project with a central pub-sub bus, pluggable actors, and multiple components including LLM integration and async tool execution.
 
 ## Workspace Structure
 ```
@@ -16,8 +16,8 @@ sar/
 │   ├── src/lib.rs
 │   ├── src/bus.rs      # SarBus - central pub-sub using tokio broadcast channels
 │   ├── src/actor.rs    # Actor trait + ActorJoinHandle
-│   ├── src/message.rs  # Message type (topic, source, payload)
-│   └── src/config.rs   # TOML config parsing (TopicsConfig, ServerConfig, UiConfig)
+│   ├── src/message.rs  # Message type (topic, source, payload, meta)
+│   └── src/config.rs   # TOML config parsing (TopicsConfig, ServerConfig, UiConfig, UiHubConfig)
 ├── sar-tui/            # ratatui TUI actor
 │   ├── Cargo.toml
 │   ├── src/lib.rs
@@ -26,10 +26,35 @@ sar/
 │   ├── Cargo.toml
 │   ├── src/lib.rs
 │   └── src/echo_actor.rs
-└── sar-server/         # axum web server
+├── sar-reverse/        # reverse actor
+│   ├── Cargo.toml
+│   ├── src/lib.rs
+│   └── src/reverse_actor.rs
+├── sar-server/         # axum web server
+│   ├── Cargo.toml
+│   ├── src/lib.rs
+│   └── src/server.rs
+├── sar-ui-hub/         # UI hub actor: routes messages, filters /continue
+│   ├── Cargo.toml
+│   └── src/lib.rs
+├── sar-llm/            # LLM client library (OpenAI-compatible API)
+│   ├── Cargo.toml
+│   └── src/lib.rs
+├── sar-llm-test/       # LLM test actor (sends messages to LLM)
+│   ├── Cargo.toml
+│   └── src/lib.rs
+├── sar-llm-test-loop/  # LLM test loop actor (conversation loop)
+│   ├── Cargo.toml
+│   └── src/lib.rs
+└── sar-llm-test-loop-tools/  # LLM test loop with async tool execution
     ├── Cargo.toml
-    ├── src/lib.rs
-    └── src/server.rs
+    ├── src/lib.rs          # LlmTestLoopToolsActor
+    ├── src/main.rs         # standalone binary for tool testing
+    ├── src/tool_actor.rs   # ToolActor trait, ToolActorRunner, message types
+    ├── src/calculator.rs   # CalculatorTool implementation
+    ├── src/sleep_tool.rs   # SleepTool with cancel support
+    ├── src/tool_actor_wrapper.rs  # Wrapper for legacy Tool trait
+    └── tests/tool_actor_tests.rs
 ```
 
 ## Architecture
@@ -56,14 +81,16 @@ pub struct Message {
     pub topic: String,
     pub source: String,
     pub payload: serde_json::Value,
+    pub meta: serde_json::Value,  // typically {"type": "..."}
 }
 ```
 - Factory methods: `new()`, `text()`
+- `with_type()` method for setting meta.type
 - Implements `Display`
 
 ### Config (sar-core/src/config.rs)
 - Loaded from TOML file via `Config::from_file(&Path)`
-- Sections: `topics` (log, input, echo, server), `server` (host, port), `ui` (show_bottom_panel)
+- Sections: `topics`, `server`, `ui`, `ui_hub` (for sar-ui-hub config)
 - Default values defined in config.rs
 
 ## Components
@@ -73,10 +100,13 @@ pub struct Message {
 - Orchestrates all actors:
   1. Loads config
   2. Creates SarBus
-  3. Creates topics (log:1000, input:100, echo:100, server:100)
+  3. Creates topics (log, input, echo, server, tool execution, user:control)
   4. Spawns echo actor (subscribes to input, publishes to log)
   5. Spawns server in background task
   6. Spawns TUI actor (blocks until Ctrl+C)
+  7. Spawns UI hub actor (routes messages, filters /continue)
+  8. Spawns LLM test loop tools actor
+  9. Spawns tool actor runners (independent async tasks)
 - Uses tracing with env-filter for logging
 
 ### sar-tui (sar-tui/src/tui_actor.rs)
@@ -104,6 +134,11 @@ pub struct Message {
 - Publishes to log topic with prefix "echo: "
 - Logs all received messages
 
+### sar-reverse (sar-reverse/src/reverse_actor.rs)
+- Reverse actor (reverses strings)
+- Subscribes to input topic
+- Publishes reversed strings to log topic
+
 ### sar-server (sar-server/src/server.rs)
 - axum web server with tower-http CORS
 - Endpoints:
@@ -111,6 +146,120 @@ pub struct Message {
   - `GET /topics` -> list of topic names
   - `POST /publish` -> publish a message (body: {topic, source, payload})
 - Runs in background task
+
+### sar-ui-hub (sar-ui-hub/src/lib.rs)
+- Routes messages between UI and backend actors
+- Subscribes to `ui:input` (user input from TUI)
+- Subscribes to producer topics (log, echo, reverse, LLM streams)
+- Publishes to `ui:user` (classified messages for TUI display)
+- Routes user input to backend topics via `route_to` config
+- **Filters `/continue <reason>`**: when user types `/continue`, publishes `{"type":"continue","reason":"..."}` to `user:control` topic instead of routing to backend
+- Normal messages are routed to backend and published to `ui:user`
+
+### sar-llm (sar-llm/src/lib.rs)
+- LLM client library with OpenAI-compatible API
+- `LlmRequest` struct with messages, config, tools
+- `LlmResponse` struct with response data
+- Client methods: `chat()`, `stream_chat()`
+- Handles streaming responses with SSE parsing
+
+### sar-llm-test (sar-llm-test/src/lib.rs)
+- LLM test actor that sends messages to LLM
+- Subscribes to input topic, publishes to LLM input topic
+
+### sar-llm-test-loop (sar-llm-test-loop/src/lib.rs)
+- LLM test loop actor that manages conversation flow
+- Handles LLM responses and tool calls
+
+### sar-llm-test-loop-tools (sar-llm-test-loop-tools/)
+- LLM test loop with fully-async tool execution
+- **LlmTestLoopToolsActor**: Main loop actor that:
+  - Subscribes to input, LLM output, stream, tool calls, and tool results topics
+  - Manages conversation history in a shared `Mutex<Vec<serde_json::Value>>`
+  - Tracks pending tool calls by ID in a `HashSet<String>`
+  - Buffers user messages while tool calls are pending
+  - When all tool results arrive, sends conversation back to LLM
+  - Processes buffered messages in order after tool resolution
+
+## Async Tool Execution Model
+
+### Architecture
+Each tool runs as an independent actor task, subscribed to bus topics:
+
+```
+User Input → UI Hub → LlmTestLoopToolsActor → LLM → Tool Calls
+                                                        ↓
+                                              publish "tool:{name}:execute"
+                                                        ↓
+                                              ToolActorRunner (independent task)
+                                                        ↓
+                                              publish "tool:results"
+                                                        ↓
+                                              LlmTestLoopToolsActor receives result
+                                                        ↓
+                                              adds to conversation, sends to LLM
+```
+
+### Bus Topics
+| Topic | Purpose |
+|-------|---------|
+| `tool:results` | All tool results published here (single topic) |
+| `tool:calculator:execute` | Calculator execution requests |
+| `tool:sleep:execute` | Sleep execution requests |
+| `user:control` | Centralized continue/interrupt signals |
+
+### Message Types (tool_actor.rs)
+```rust
+pub struct ToolExecuteMessage {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+}
+
+pub struct ToolResultMessage {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub success: bool,
+    pub result: String,
+    pub error: Option<String>,
+}
+
+pub struct ToolCancelMessage {
+    pub tool_call_id: String,
+}
+```
+
+### ToolActor Trait
+```rust
+pub trait ToolActor: Send + Sync {
+    fn tool_syntax(&self) -> ToolSyntax;
+    async fn execute_tool(&self, arguments: &serde_json::Value) -> Result<String, String>;
+    fn supports_cancel(&self) -> bool { false }
+}
+```
+
+### ToolActorRunner
+- Subscribes to `tool:{name}:execute` topic
+- If `supports_cancel()`, subscribes to `user:control` topic
+- Spawns each tool execution in a separate `tokio::spawn` task
+- On cancel signal, calls `abort_handle.abort()` on the execution task
+- Publishes results to `tool:results` topic
+
+### Tool Implementations
+- **CalculatorTool**: Performs math operations (add, subtract, multiply, divide)
+- **SleepTool**: Sleeps for specified duration, `supports_cancel() = true`
+
+### Continue/Interrupt Flow
+1. User types `/continue interrupted the sleep` in TUI
+2. UI hub filters it, publishes `{"type":"continue","reason":"interrupted the sleep"}` to `user:control`
+3. SleepTool's runner (subscribed to `user:control`) receives it, aborts the tokio task
+4. Tool runner publishes error result to `tool:results`
+5. LlmTestLoopToolsActor receives result, adds to conversation, sends to LLM
+
+### Message Buffering
+- When tool calls are pending, new user messages are buffered in `pending_messages: Vec<String>`
+- `/dump` command still works immediately (unbuffered)
+- After all tool results arrive, buffered messages are processed in order before sending to LLM
 
 ## Configuration (config.toml)
 ```toml
@@ -126,6 +275,14 @@ port = 3000
 
 [ui]
 show_bottom_panel = true
+
+[ui_hub]
+name = "default"
+user_topic = "ui:user"
+input_topic = "ui:input"
+buffer_size = 1000
+subscribe_to = ["sar:log", "sar:echo", "sar:reverse", "llm-test:0:stream"]
+route_to = ["sar:llm-test:0:in"]
 ```
 
 ## Dependencies
@@ -147,14 +304,36 @@ show_bottom_panel = true
 - tokio, tracing, tracing-subscriber
 - serde, serde_json, thiserror, async-trait
 
+### sar-reverse
+- sar-core
+- tokio, tracing, tracing-subscriber
+- serde, serde_json, thiserror, async-trait
+
 ### sar-server
 - sar-core
 - axum 0.8, tower 0.5, tower-http 0.6 (cors)
 - tokio, tracing, tracing-subscriber
 - serde, serde_json, thiserror, async-trait
 
+### sar-ui-hub
+- sar-core
+- tokio, tracing, tracing-subscriber
+- serde, serde_json, thiserror, async-trait
+
+### sar-llm
+- tokio, reqwest, serde, serde_json, tracing, async-trait
+
+### sar-llm-test
+- sar-core, sar-llm, tokio, tracing
+
+### sar-llm-test-loop
+- sar-core, sar-llm, tokio, tracing
+
+### sar-llm-test-loop-tools
+- sar-core, sar-llm, tokio, tracing, async-trait, serde, serde_json
+
 ### sar (binary)
-- All four crates
+- All crates
 - clap 4 (derive), tokio, tracing, tracing-subscriber
 - serde, serde_json, thiserror
 
@@ -181,17 +360,42 @@ curl -X POST http://127.0.0.1:3000/publish \
   -d '{"topic":"sar:input","source":"test","payload":"hello"}'
 ```
 
+### Test Tool Execution
+```bash
+cd sar-llm-test-loop-tools && cargo run
+# Publish tool execute messages via server or bus
+```
+
+## Tests
+- **sar-llm-test-loop-tools**: 20 tests
+  - Tool syntax serialization/deserialization
+  - ToolActor trait implementation tests
+  - ToolActorRunner creation tests
+  - CalculatorTool execute tests
+  - SleepTool execute tests (including zero duration, missing args)
+  - SleepTool supports_cancel test
+  - LlmTestLoopToolsActor tool management tests
+
 ## Known Issues / Warnings
 
-1. **Unreachable code warning in sar-tui**: The cleanup code after the main loop (`disable_raw_mode`, `LeaveAlternateScreen`) is technically unreachable because the loop has no break condition except Ctrl+C which calls `break`. This is actually fine - the cleanup code IS reachable when Ctrl+C is pressed. The warning is a false positive from the compiler because of how the loop is structured.
+1. **Unreachable code warning in sar-tui**: The cleanup code after the main loop is technically unreachable because the loop has no break condition except Ctrl+C which calls `break`. This is actually fine - the cleanup code IS reachable when Ctrl+C is pressed. The warning is a false positive from the compiler because of how the loop is structured.
 
-2. **No tests yet**: The project has no test code.
+2. **sar-llm and sar-llm-test have compilation errors**: These crates have known issues with the async_trait macro and are not yet fully functional.
 
 3. **TUI is not tested in a terminal**: The ratatui TUI requires a terminal emulator to run. It won't work in non-TTY environments.
 
 ## Git State
 - Branch: main
-- Latest commit: `ab4c855` - initial commit with full project
+- Latest commits:
+  - `44544de` - fix: parse user:control as Value instead of ContinueMessage
+  - `2ff9f6d` - refactor: remove unnecessary user:control subscription from loop actor
+  - `f80fcc3` - fix: don't send to LLM from user:control branch while tools are pending
+  - `b0ab878` - feat: centralized continue/interrupt via user:control topic
+  - `9007fc1` - feat: buffer user messages while tool calls are pending
+  - `2f44bf7` - fix: track pending tool calls by ID to prevent overflow on overlapping batches
+  - `f3f99d1` - feat: fully-async tool execution model with independent tool actors
+  - `f0a678b` - feat: add ToolActor trait for runtime tool management
+  - `ab4c855` - initial commit with full project
 - Working tree: clean
 
 ## What Was Built (Conversation History)
@@ -206,6 +410,20 @@ curl -X POST http://127.0.0.1:3000/publish \
 9. Fixed numerous Rust compilation errors (type mismatches, borrow issues, missing imports, trait bounds)
 10. Cleaned up warnings (unused imports, unreachable patterns)
 11. Committed initial state
+12. Added sar-reverse actor
+13. Added sar-ui-hub for message routing
+14. Added sar-llm, sar-llm-test, sar-llm-test-loop for LLM integration
+15. Implemented fully-async tool execution model:
+    - ToolActor trait with object-safe design
+    - ToolActorRunner for independent async tool tasks
+    - Bus-based message passing (tool:{name}:execute, tool:results, user:control)
+    - SleepTool with cancel support
+    - CalculatorTool implementation
+16. Fixed pending_count overflow by tracking tool calls by ID in HashSet
+17. Added message buffering while tool calls are pending
+18. Implemented centralized continue/interrupt via user:control topic
+19. Simplified loop actor to only subscribe to tool:results (tool runner handles cancel)
+20. Fixed ContinueMessage deserialization issue (parse as Value instead)
 
 ## Key Technical Decisions
 - `tokio::sync::broadcast` channels for pub-sub (not mpsc, since multiple subscribers)
@@ -215,10 +433,15 @@ curl -X POST http://127.0.0.1:3000/publish \
 - TOML for config (not YAML, per user preference)
 - Each actor is a separate crate but all run in the same process
 - Server runs as a detached tokio task, TUI blocks the main thread
+- **Async tool execution**: Each tool runs as an independent actor task with bus-based messaging
+- **Single tool:results topic**: All tool results published to one topic (not per-tool)
+- **Centralized user:control**: Continue/interrupt signals sent to shared topic, tools subscribe individually
+- **HashSet for pending calls**: Tracks by tool_call_id to prevent overflow on overlapping batches
+- **Message buffering**: User messages buffered while tools are pending, processed in order after resolution
 
 ## Potential Next Steps
 1. Add more actors (e.g., file watcher, HTTP client, etc.)
-2. Add tests
+2. Add tests for sar-llm and sar-llm-test
 3. Improve TUI (add more widgets, colors, keybindings)
 4. Add persistence (save log to file)
 5. Add more server endpoints (WebSocket for real-time log streaming)
