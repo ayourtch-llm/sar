@@ -9,10 +9,12 @@ use sar_core::actor::Actor;
 use sar_core::bus::SarBus;
 use sar_core::config::McpServerConfig;
 use sar_tool_actors::{ToolActor, ToolActorRunner};
+use std::process::Stdio;
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// A single MCP tool wrapped as a ToolActor.
 pub struct McpToolActor {
@@ -238,9 +240,29 @@ impl McpServerRunner {
         let cmd = {
             let mut c = tokio::process::Command::new(&self.config.command[0]);
             c.args(&self.config.command[1..]);
+            c.stderr(Stdio::piped());
             c
         };
-        let transport = TokioChildProcess::builder(cmd).spawn()?.0;
+        let (transport, stderr) = TokioChildProcess::builder(cmd).spawn()?;
+        
+        // Capture stderr and log it as tracing events
+        if let Some(stderr_handle) = stderr {
+            let prefix = self.prefix.clone();
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr_handle);
+                let mut lines_stream = reader.lines();
+                while let Ok(Some(text)) = lines_stream.next_line().await {
+                    if text.contains("ERROR") || text.contains("error") {
+                        warn!("[mcp:{}:stderr] {}", prefix, text);
+                    } else if text.contains("WARN") || text.contains("warn") {
+                        warn!("[mcp:{}:stderr] {}", prefix, text);
+                    } else {
+                        info!("[mcp:{}:stderr] {}", prefix, text);
+                    }
+                }
+            });
+        }
+        
         let service = McpClientHandler;
         let running_service: RunningService<RoleClient, McpClientHandler> = rmcp::serve_client(service, transport).await?;
         let peer = Arc::new(Mutex::new(running_service.peer().clone()));

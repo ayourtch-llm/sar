@@ -46,3 +46,6 @@ default = true
 [mcp_servers.run_command]
 command = ["/Users/ayourtch/rust/mcp-run-command/target/debug/mcp-run-command"]
 default = true
+[mcp_servers.device-cli]
+command = ["/Users/ayourtch/rust/mayday/aymcp-exec-cli/target/debug/aymcp-exec-cli", "--config","aymcp-exec-cli.cfg"]
+default = true
