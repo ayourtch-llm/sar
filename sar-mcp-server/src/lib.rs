@@ -240,10 +240,9 @@ impl McpServerRunner {
         let cmd = {
             let mut c = tokio::process::Command::new(&self.config.command[0]);
             c.args(&self.config.command[1..]);
-            c.stderr(Stdio::piped());
             c
         };
-        let (transport, stderr) = TokioChildProcess::builder(cmd).spawn()?;
+        let (transport, stderr) = TokioChildProcess::builder(cmd).stderr(Stdio::piped()).spawn()?;
         
         // Capture stderr and log it as tracing events
         if let Some(stderr_handle) = stderr {
