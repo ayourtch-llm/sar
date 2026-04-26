@@ -212,7 +212,7 @@ impl LlmTestLoopToolsActor {
                     max_tokens: 65536,
                 })
             },
-            tools: if tool_defs.is_empty() {
+            tools: if tool_defs.is_empty() || self.grammar.lock().unwrap().is_some() {
                 None
             } else {
                 Some(tool_defs.to_vec())

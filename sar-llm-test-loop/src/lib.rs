@@ -4,7 +4,7 @@ use sar_core::bus::SarBus;
 use sar_core::config::LlmConfig;
 use sar_core::message::Message;
 use sar_llm::LlmRequest;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{error, info, warn};
@@ -18,6 +18,7 @@ pub struct LlmTestLoopActor {
     pub llm_stream_topic: String,
     pub stream_output_topic: String,
     pub llm_base_url: String,
+    pub grammar: Arc<StdMutex<Option<String>>>,
 }
 
 impl LlmTestLoopActor {
@@ -30,6 +31,7 @@ impl LlmTestLoopActor {
             llm_stream_topic,
             stream_output_topic,
             llm_base_url: String::new(),
+            grammar: Arc::new(StdMutex::new(None)),
         }
     }
 
@@ -52,6 +54,7 @@ impl Actor for LlmTestLoopActor {
                 self.input_topic.clone(),
                 self.llm_out_topic.clone(),
                 self.llm_stream_topic.clone(),
+                "llm-test-loop:0:grammar".to_string(),
             ],
             publications: vec![self.stream_output_topic.clone()],
         }
@@ -70,6 +73,11 @@ impl Actor for LlmTestLoopActor {
 
         let mut stream_rx = bus.subscribe(&self.id(), &self.llm_stream_topic).await.map_err(|e| {
             format!("Failed to subscribe to stream topic '{}': {}", self.llm_stream_topic, e)
+        })?;
+
+        let grammar_topic = "llm-test-loop:0:grammar".to_string();
+        let mut grammar_rx = bus.subscribe(&self.id(), &grammar_topic).await.map_err(|e| {
+            format!("Failed to subscribe to grammar topic '{}': {}", grammar_topic, e)
         })?;
 
         info!(
@@ -118,8 +126,8 @@ impl Actor for LlmTestLoopActor {
                                         max_tokens: 65536,
                                     })
                                 },
-                                tools: None,
-                                grammar: None,
+                                tools: if self.grammar.lock().unwrap().is_some() { None } else { None },
+                                grammar: self.grammar.lock().unwrap().clone(),
                             };
 
                             let msg = Message::new(
@@ -207,6 +215,55 @@ impl Actor for LlmTestLoopActor {
                         }
                         Err(RecvError::Closed) => {
                             info!("LLM test loop actor {} stream topic closed", self.index);
+                        }
+                    }
+                }
+                result = grammar_rx.recv() => {
+                    match result {
+                        Ok(msg) => {
+                            if let Ok(v) = serde_json::from_value::<serde_json::Value>(msg.payload.clone()) {
+                                if let Some(grammar_type) = v.get("type").and_then(|t| t.as_str()) {
+                                    if grammar_type == "Grammar" {
+                                        let content = v.get("content");
+                                        match content {
+                                            Some(serde_json::Value::String(s)) => {
+                                                info!(
+                                                    "LLM test loop actor {} setting grammar, length={}",
+                                                    self.index, s.len()
+                                                );
+                                                let mut g = self.grammar.lock().unwrap();
+                                                *g = Some(s.clone());
+                                            }
+                                            _ => {
+                                                info!("LLM test loop actor {} clearing grammar", self.index);
+                                                let mut g = self.grammar.lock().unwrap();
+                                                *g = None;
+                                            }
+                                        }
+                                        let confirmation = Message::text(
+                                            &self.stream_output_topic,
+                                            &self.id(),
+                                            if content.is_some() {
+                                                format!("Grammar set ({} chars)", content.as_ref().unwrap().to_string().len())
+                                            } else {
+                                                "Grammar cleared".to_string()
+                                            },
+                                        ).with_type("Info");
+                                        if let Err(e) = bus.publish(&self.id(), confirmation).await {
+                                            error!("Failed to publish grammar confirmation: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(RecvError::Lagged(n)) => {
+                            warn!(
+                                "LLM test loop actor {} lagged behind on grammar, dropped {} messages",
+                                self.index, n
+                            );
+                        }
+                        Err(RecvError::Closed) => {
+                            info!("LLM test loop actor {} grammar topic closed", self.index);
                         }
                     }
                 }
