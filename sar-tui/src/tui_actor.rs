@@ -90,6 +90,18 @@ impl Actor for TuiActor {
                         let meta_type = msg.meta.get("type").and_then(|t| t.as_str()).unwrap_or("");
                         if meta_type == "LlmStreamEnd" {
                             let mut state = state_clone.lock().await;
+                            let item_id = uuid::Uuid::new_v4().to_string();
+                            let entry = String::from("------");
+                            let height = 1;
+                            state.log_items.push(LogItem {
+                                item_id,
+                                text: entry,
+                                height,
+                                entry_type: LogEntryType::EndOfReply,
+                            });
+                            if state.at_bottom {
+                                state.scroll = state.max_scroll(state.visible_lines);
+                            }
                             state.finalize_stream();
                             continue;
                         }
@@ -613,6 +625,7 @@ enum LogEntryType {
     Dump,
     UserInput,
     Bottom,
+    EndOfReply,
 }
 
 #[derive(Debug, Clone)]
@@ -923,6 +936,7 @@ impl TuiState {
                         LogEntryType::ToolCall => Style::default().fg(Color::Yellow),
                         LogEntryType::ToolResult => Style::default().fg(Color::Green),
                         LogEntryType::Dump => Style::default().fg(Color::Cyan),
+                        LogEntryType::EndOfReply => Style::default().fg(Color::Blue),
                         LogEntryType::UserInput => Style::default().bg(LIGHT_GRAY),
                         LogEntryType::Stream | LogEntryType::Log => Style::default(),
                         LogEntryType::Bottom => Style::default(),
