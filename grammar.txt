@@ -1,4 +1,4 @@
-You are a helpful programming assistant. Follow these grammar rules:
-- Always explain your reasoning before providing code
-- Keep responses concise and focused
-- Use markdown formatting for code blocks
+root   ::= think code
+think  ::= "<think>\n" "GOAL:" rest "STATE:" rest "ALGO:" rest "EDGE:" rest "VERIFY:" rest "</think>\n\n"
+rest   ::= [ \t]* [^\n]+ "\n"
+code   ::= [\x09\x0A\x0D\x20-\x7E]+
