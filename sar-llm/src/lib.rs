@@ -6,7 +6,7 @@ use sar_core::config::LlmConfig;
 use sar_core::message::Message;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRequest {
@@ -88,6 +88,9 @@ impl LlmActor {
         if let Err(e) = std::fs::write("/tmp/sar.txt", &dump) {
             error!("Failed to write dump to /tmp/sar.txt: {}", e);
         }
+        
+        debug!("[llm{}] Sending request to API (model={}, messages={})", 
+               self.index, config.model, body["messages"].as_array().map(|a| a.len()).unwrap_or(0));
 
         let response = client
             .post(format!("{}/chat/completions", config.base_url))
@@ -260,6 +263,15 @@ impl LlmActor {
             info!("LLM actor {} accumulated tool call {}: {}", self.index, idx, func_name);
             tool_calls.push(full_tc);
         }
+
+        let response_summary = if full_response.len() > 200 {
+            format!("{}...", &full_response[..197])
+        } else {
+            full_response.clone()
+        };
+        
+        debug!("[llm{}] Received response (tool_calls={}, len={}): {}", 
+               self.index, tool_calls.len(), full_response.len(), response_summary);
 
         Ok((full_response, tool_calls))
     }
