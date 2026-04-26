@@ -295,7 +295,7 @@ impl Actor for TuiActor {
                                             tracing::error!("[tui] Failed to send interrupt signal: {}", e);
                                         }
                                     }
-                                } else if key.modifiers == KeyModifiers::NONE {
+                                } else if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT {
                                     let line_idx = state.active_line;
                                     state.input_lines[line_idx].push(c);
                                 }
