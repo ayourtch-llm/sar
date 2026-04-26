@@ -855,8 +855,19 @@ impl TuiState {
         }
         if let Some(active_id) = &self.tool_call_item_id {
             if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
-                item.text = chunk;
-                item.height = height;
+                if chunk.contains(&item.text) && chunk.len() > item.text.len() {
+                    item.text = chunk;
+                    item.height = height;
+                } else {
+                    let item_id = uuid::Uuid::new_v4().to_string();
+                    self.tool_call_item_id = Some(item_id.clone());
+                    self.log_items.push(LogItem {
+                        item_id,
+                        text: chunk,
+                        height,
+                        entry_type: LogEntryType::ToolCall,
+                    });
+                }
             }
         }
         if self.at_bottom {
@@ -866,23 +877,14 @@ impl TuiState {
 
     fn add_tool_result_chunk(&mut self, chunk: String) {
         let height = chunk.matches('\n').count() + 1;
-        if self.tool_result_item_id.is_none() {
-            let item_id = uuid::Uuid::new_v4().to_string();
-            self.tool_result_item_id = Some(item_id.clone());
-            self.log_items.push(LogItem {
-                item_id,
-                text: chunk,
-                height,
-                entry_type: LogEntryType::ToolResult,
-            });
-            return;
-        }
-        if let Some(active_id) = &self.tool_result_item_id {
-            if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
-                item.text = chunk;
-                item.height = height;
-            }
-        }
+        let item_id = uuid::Uuid::new_v4().to_string();
+        self.tool_result_item_id = Some(item_id.clone());
+        self.log_items.push(LogItem {
+            item_id,
+            text: chunk,
+            height,
+            entry_type: LogEntryType::ToolResult,
+        });
         if self.at_bottom {
             self.scroll = self.max_scroll(self.visible_lines);
         }
