@@ -6,6 +6,7 @@ use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
 pub const USER_CONTROL_TOPIC: &str = "user:control";
+pub const GRAMMAR_TOPIC: &str = "llm-test-tools:0:grammar";
 
 pub fn is_continue_message(input: &str) -> Option<String> {
     if let Some(rest) = input.strip_prefix("/continue ") {
@@ -15,6 +16,28 @@ pub fn is_continue_message(input: &str) -> Option<String> {
         return Some("".to_string());
     }
     None
+}
+
+pub fn parse_grammar_message(input: &str) -> Option<String> {
+    if let Some(rest) = input.strip_prefix("/grammar ") {
+        return Some(if rest.trim().is_empty() {
+            String::new()
+        } else {
+            rest.to_string()
+        });
+    }
+    if input == "/grammar" {
+        return Some(String::new());
+    }
+    None
+}
+
+pub async fn resolve_grammar_content(content: &str) -> Result<String, String> {
+    let path = std::path::Path::new(content);
+    match tokio::fs::read_to_string(path).await {
+        Ok(contents) => Ok(contents),
+        Err(e) => Err(format!("Failed to read '{}': {}", content, e)),
+    }
 }
 
 #[derive(Debug, Default)]
@@ -75,6 +98,7 @@ impl Actor for UiHubActor {
         let mut pubs = self.config.route_to.clone();
         pubs.push(self.config.user_topic.clone());
         pubs.push(crate::USER_CONTROL_TOPIC.to_string());
+        pubs.push(crate::GRAMMAR_TOPIC.to_string());
         sar_core::actor::ActorAnnouncement {
             id: self.id(),
             subscriptions: subs,
@@ -164,6 +188,43 @@ impl Actor for UiHubActor {
                             error!("UI hub '{}' failed to publish continue to '{}': {}", self.config.name, USER_CONTROL_TOPIC, e);
                         } else {
                             info!("UI hub '{}' published continue to '{}': reason='{}'", self.config.name, USER_CONTROL_TOPIC, reason);
+                        }
+                        continue;
+                    }
+
+                    if let Some(grammar_content) = parse_grammar_message(&payload_str) {
+                        let is_clear = grammar_content.is_empty();
+                        let resolved_content = if !is_clear {
+                            match resolve_grammar_content(&grammar_content).await {
+                                Ok(contents) => contents,
+                                Err(e) => {
+                                    error!("UI hub '{}' failed to read grammar file: {}", self.config.name, e);
+                                    let err_msg = Message::text(
+                                        &self.config.user_topic,
+                                        &hub_id,
+                                        format!("Error setting grammar: {}", e),
+                                    ).with_type("Error");
+                                    if let Err(e) = bus.publish(&hub_id, err_msg).await {
+                                        error!("UI hub '{}' failed to publish error: {}", self.config.name, e);
+                                    }
+                                    continue;
+                                }
+                            }
+                        } else {
+                            String::new()
+                        };
+                        let grammar_msg = Message::new(
+                            crate::GRAMMAR_TOPIC,
+                            &hub_id,
+                            serde_json::json!({
+                                "type": "Grammar",
+                                "content": if is_clear { None } else { Some(resolved_content) },
+                            }),
+                        ).with_type("Grammar");
+                        if let Err(e) = bus.publish(&hub_id, grammar_msg).await {
+                            error!("UI hub '{}' failed to publish grammar to '{}': {}", self.config.name, GRAMMAR_TOPIC, e);
+                        } else {
+                            info!("UI hub '{}' published grammar: clear={}", self.config.name, is_clear);
                         }
                         continue;
                     }

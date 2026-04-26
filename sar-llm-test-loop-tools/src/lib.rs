@@ -43,6 +43,7 @@ pub struct LlmTestLoopToolsActor {
     pub llm_base_url: String,
     pub tools: StdMutex<Vec<Arc<dyn ToolActor>>>,
     pub system_message: Arc<StdMutex<String>>,
+    pub grammar: Arc<StdMutex<Option<String>>>,
 }
 
 impl LlmTestLoopToolsActor {
@@ -66,6 +67,7 @@ impl LlmTestLoopToolsActor {
             llm_base_url: String::new(),
             tools: StdMutex::new(Vec::new()),
             system_message: Arc::new(StdMutex::new(String::new())),
+            grammar: Arc::new(StdMutex::new(None)),
         }
     }
 
@@ -77,6 +79,7 @@ impl LlmTestLoopToolsActor {
     pub fn with_system_message(message: String) -> Self {
         Self {
             system_message: Arc::new(StdMutex::new(message)),
+            grammar: Arc::new(StdMutex::new(None)),
             ..Self::default()
         }
     }
@@ -214,6 +217,7 @@ impl LlmTestLoopToolsActor {
             } else {
                 Some(tool_defs.to_vec())
             },
+            grammar: self.grammar.lock().unwrap().clone(),
         };
 
         let msg = Message::new(
@@ -243,6 +247,7 @@ impl Actor for LlmTestLoopToolsActor {
             self.llm_stream_topic.clone(),
             self.llm_tool_calls_topic.clone(),
             TOOLS_RESULTS_TOPIC.to_string(),
+            "llm-test-tools:0:grammar".to_string(),
         ];
         let tools = self.tools.lock().unwrap();
         for tool in tools.iter() {
@@ -276,6 +281,11 @@ impl Actor for LlmTestLoopToolsActor {
 
         let mut tool_results_rx = bus.subscribe(&self.id(), TOOLS_RESULTS_TOPIC).await.map_err(|e| {
             format!("Failed to subscribe to tool results topic '{}': {}", TOOLS_RESULTS_TOPIC, e)
+        })?;
+
+        let grammar_topic = "llm-test-tools:0:grammar".to_string();
+        let mut grammar_rx = bus.subscribe(&self.id(), &grammar_topic).await.map_err(|e| {
+            format!("Failed to subscribe to grammar topic '{}': {}", grammar_topic, e)
         })?;
 
         let tool_defs: Vec<serde_json::Value> = {
@@ -597,6 +607,55 @@ impl Actor for LlmTestLoopToolsActor {
                         }
                         Err(RecvError::Closed) => {
                             warn!("LLM test loop tools actor {} tool results topic closed", self.index);
+                        }
+                    }
+                }
+                result = grammar_rx.recv() => {
+                    match result {
+                        Ok(msg) => {
+                            if let Ok(v) = serde_json::from_value::<serde_json::Value>(msg.payload.clone()) {
+                                if let Some(grammar_type) = v.get("type").and_then(|t| t.as_str()) {
+                                    if grammar_type == "Grammar" {
+                                        let content = v.get("content");
+                                        match content {
+                                            Some(serde_json::Value::String(s)) => {
+                                                info!(
+                                                    "LLM test loop tools actor {} setting grammar, length={}",
+                                                    self.index, s.len()
+                                                );
+                                                let mut g = self.grammar.lock().unwrap();
+                                                *g = Some(s.clone());
+                                            }
+                                            _ => {
+                                                info!("LLM test loop tools actor {} clearing grammar", self.index);
+                                                let mut g = self.grammar.lock().unwrap();
+                                                *g = None;
+                                            }
+                                        }
+                                        let confirmation = Message::text(
+                                            &self.stream_output_topic,
+                                            &self.id(),
+                                            if content.is_some() {
+                                                format!("Grammar set ({} chars)", content.as_ref().unwrap().to_string().len())
+                                            } else {
+                                                "Grammar cleared".to_string()
+                                            },
+                                        ).with_type("Info");
+                                        if let Err(e) = bus.publish(&self.id(), confirmation).await {
+                                            error!("Failed to publish grammar confirmation: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(RecvError::Lagged(n)) => {
+                            warn!(
+                                "LLM test loop tools actor {} lagged behind on grammar, dropped {} messages",
+                                self.index, n
+                            );
+                        }
+                        Err(RecvError::Closed) => {
+                            info!("LLM test loop tools actor {} grammar topic closed", self.index);
                         }
                     }
                 }

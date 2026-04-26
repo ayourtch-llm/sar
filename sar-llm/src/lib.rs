@@ -18,6 +18,8 @@ pub struct LlmRequest {
     pub config: Option<LlmConfig>,
     #[serde(default)]
     pub tools: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    pub grammar: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +66,7 @@ impl LlmActor {
         }
     }
 
-    async fn send_request(&self, config: &LlmConfig, messages: &[serde_json::Value], tools: Option<&[serde_json::Value]>, bus: &SarBus) -> Result<(String, Vec<serde_json::Value>), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send_request(&self, config: &LlmConfig, messages: &[serde_json::Value], tools: Option<&[serde_json::Value]>, grammar: Option<&str>, bus: &SarBus) -> Result<(String, Vec<serde_json::Value>), Box<dyn std::error::Error + Send + Sync>> {
         let stream_id = uuid::Uuid::new_v4().to_string();
         let client = reqwest::Client::new();
         
@@ -77,6 +79,9 @@ impl LlmActor {
         });
         if let Some(tools) = tools {
             body["tools"] = serde_json::to_value(tools).unwrap();
+        }
+        if let Some(grammar_str) = grammar {
+            body["grammar"] = serde_json::json!(grammar_str);
         }
 
         let dump = format!("=== LLM Request (index={}) ===\n{}\n=================\n", self.index, serde_json::to_string_pretty(&body).unwrap());
@@ -435,6 +440,7 @@ impl Actor for LlmActor {
                                 };
                                 info!("[llm{}] Preparing to send {} messages to API", self.index, messages_vec.len());
                                 let tools_vec = request.tools.clone();
+                                let grammar_str = request.grammar.clone();
                                 let bus_clone = bus.clone();
                                 let stream_topic = self.stream_topic.clone();
                                 let stats_topic = self.stats_topic.clone();
@@ -456,7 +462,8 @@ impl Actor for LlmActor {
                                         config: config_merged,
                                     };
                                     let tools = tools_vec.as_deref();
-                                    llm.send_request(&llm.config, &messages_clone, tools, &bus_clone).await
+                                    let grammar = grammar_str.as_deref();
+                                    llm.send_request(&llm.config, &messages_clone, tools, grammar, &bus_clone).await
                                 }));
                             }
                             Err(RecvError::Lagged(n)) => {

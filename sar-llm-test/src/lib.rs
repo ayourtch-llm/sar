@@ -104,6 +104,7 @@ impl Actor for LlmTestActor {
                                     })
                                 },
                                 tools: None,
+                                grammar: None,
                             };
 
                             let msg = Message::new(

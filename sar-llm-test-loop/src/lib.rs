@@ -119,6 +119,7 @@ impl Actor for LlmTestLoopActor {
                                     })
                                 },
                                 tools: None,
+                                grammar: None,
                             };
 
                             let msg = Message::new(

@@ -96,6 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     bus.create_topic("llm-test-loop:0:stream", 1000).await;
     bus.create_topic("llm-test-tools:0:in", 100).await;
     bus.create_topic("llm-test-tools:0:stream", 1000).await;
+    bus.create_topic("llm-test-tools:0:grammar", 100).await;
     bus.create_topic("ui:user", 1000).await;
     bus.create_topic("ui:input", 100).await;
 

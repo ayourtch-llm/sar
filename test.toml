@@ -14,8 +14,7 @@ show_bottom_panel = true
 
 [llm]
 model = "qwen3.5-long:latest"
-# base_url = "http://gx10-96b6:8080/v1"
-base_url = "http://ayourtch-desktop:8000/v1"
+base_url = "http://gx10-96b6:8080/v1"
 api_key = ""
 temperature = 0.7
 max_tokens = 65536
@@ -38,15 +37,6 @@ default = true
 [mcp_servers.read_file]
 command = ["/Users/ayourtch/rust/mcp-read-file/target/debug/mcp-read-file"]
 default = true
-[mcp_servers.edit-tools]
-command = ["/Users/ayourtch/rust/mcp-file-edit/target/debug/mcp-file-edit"]
-default = true
-[mcp_servers.write_file]
-command = ["/Users/ayourtch/rust/mcp-write-file/target/debug/mcp-write-file"]
-default = true
 [mcp_servers.run_command]
 command = ["/Users/ayourtch/rust/mcp-run-command/target/debug/mcp-run-command"]
-default = true
-[mcp_servers.device-cli]
-command = ["/Users/ayourtch/rust/mayday/aymcp-exec-cli/target/debug/aymcp-exec-cli", "--config","aymcp-exec-cli.cfg"]
 default = true
