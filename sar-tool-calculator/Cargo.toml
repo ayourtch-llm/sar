@@ -7,3 +7,4 @@ edition = "2021"
 sar-tool-actors = { path = "../sar-tool-actors" }
 serde_json = "1"
 async-trait = "0.1"
+aycalc = { git = "https://github.com/ayourtch/aycalc" }
