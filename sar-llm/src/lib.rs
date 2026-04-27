@@ -110,7 +110,7 @@ impl LlmActor {
         let mut stream = response.bytes_stream();
         let mut rxtokens: usize = 0;
         let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-        let mut tool_call_accumulators: std::collections::HashMap<usize, (String, String)> = std::collections::HashMap::new();
+        let mut tool_call_accumulators: std::collections::HashMap<usize, (String, String, String)> = std::collections::HashMap::new();
 
         while let Some(chunk) = stream.next().await {
             let chunk = match chunk {
@@ -193,18 +193,23 @@ impl LlmActor {
                                     let idx = index as usize;
                                     let name = tool_call["function"]["name"].as_str().unwrap_or("");
                                     let args = tool_call["function"]["arguments"].as_str().unwrap_or("");
+                                    let call_id = tool_call["id"].as_str().unwrap_or("");
                                     if !name.is_empty() {
-                                        tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new())).0.push_str(name);
+                                        tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).0.push_str(name);
                                     }
                                     if !args.is_empty() {
-                                        tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new())).1.push_str(args);
+                                        tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).1.push_str(args);
                                     }
-                                    let (func_name, func_args) = tool_call_accumulators.get(&idx).unwrap();
+                                    if !call_id.is_empty() {
+                                        tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).2.push_str(call_id);
+                                    }
+                                    let (func_name, func_args, func_call_id) = tool_call_accumulators.get(&idx).unwrap();
                                     let tc_msg = Message::new(
                                         &self.tool_calls_topic,
                                         &self.id(),
                                         serde_json::json!({
                                             "index": idx,
+                                            "id": func_call_id,
                                             "function": {
                                                 "name": func_name,
                                                 "arguments": func_args,
@@ -217,7 +222,14 @@ impl LlmActor {
                                     let stream_tc_msg = Message::new(
                                         &self.stream_topic,
                                         &self.id(),
-                                        format!("  [tool_call] {}({})", func_name, func_args),
+                                        serde_json::json!({
+                                            "index": idx,
+                                            "id": func_call_id,
+                                            "function": {
+                                                "name": func_name,
+                                                "arguments": func_args,
+                                            }
+                                        }),
                                     ).with_type("LlmToolCall").with_stream_id(stream_id.clone());
                                     if let Err(e) = bus.publish(&self.id(), stream_tc_msg).await {
                                         error!("Failed to publish tool call stream chunk: {}", e);
@@ -251,9 +263,9 @@ impl LlmActor {
             info!("LLM actor {} published stats to '{}'", self.index, self.stats_topic);
         }
 
-        for (idx, (func_name, func_args)) in &tool_call_accumulators {
+        for (idx, (func_name, func_args, func_call_id)) in &tool_call_accumulators {
             let full_tc = serde_json::json!({
-                "id": format!("call_{}", stream_id).replace('-', "_"),
+                "id": func_call_id,
                 "type": "function",
                 "function": {
                     "name": func_name,

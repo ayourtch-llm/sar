@@ -88,6 +88,7 @@ impl Actor for TuiActor {
                 match rx.recv().await {
                     Ok(msg) => {
                         let meta_type = msg.meta.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        let msg_id = msg.payload.get("id").and_then(|t| t.as_str()).unwrap_or("");
                         if meta_type == "LlmStreamEnd" {
                             let mut state = state_clone.lock().await;
                             let item_id = uuid::Uuid::new_v4().to_string();
@@ -137,7 +138,8 @@ impl Actor for TuiActor {
                         } else if meta_type == "LlmToolCall" {
                             state.thinking_item_id = None;
                             state.streaming_item_id = None;
-                            state.add_tool_call_chunk(display);
+                            let display = format!("[tool_call] {}", msg.payload);
+                            state.add_tool_call_chunk(display, msg_id.to_string());
                         } else if meta_type == "LlmToolResult" {
                             state.thinking_item_id = None;
                             state.streaming_item_id = None;
@@ -615,12 +617,12 @@ fn layout_chunks(area: Rect, show_bottom: bool) -> [Rect; 4] {
     [chunks[0], chunks[1], chunks[2], chunks[3]]
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum LogEntryType {
     Log,
     Stream,
     Thinking,
-    ToolCall,
+    ToolCall(String),
     ToolResult,
     Dump,
     UserInput,
@@ -840,7 +842,7 @@ impl TuiState {
         }
     }
 
-    fn add_tool_call_chunk(&mut self, chunk: String) {
+    fn add_tool_call_chunk(&mut self, chunk: String, tool_call_id: String) {
         let height = chunk.matches('\n').count() + 1;
         if self.tool_call_item_id.is_none() {
             let item_id = uuid::Uuid::new_v4().to_string();
@@ -849,13 +851,13 @@ impl TuiState {
                 item_id,
                 text: chunk,
                 height,
-                entry_type: LogEntryType::ToolCall,
+                entry_type: LogEntryType::ToolCall(tool_call_id),
             });
             return;
         }
         if let Some(active_id) = &self.tool_call_item_id {
             if let Some(item) = self.log_items.iter_mut().find(|it| &it.item_id == active_id) {
-                if chunk.contains(&item.text) && chunk.len() > item.text.len() {
+                if let LogEntryType::ToolCall(ref old_tool_call_id) = item.entry_type && old_tool_call_id == &tool_call_id {
                     item.text = chunk;
                     item.height = height;
                 } else {
@@ -865,7 +867,7 @@ impl TuiState {
                         item_id,
                         text: chunk,
                         height,
-                        entry_type: LogEntryType::ToolCall,
+                        entry_type: LogEntryType::ToolCall(tool_call_id),
                     });
                 }
             }
@@ -935,7 +937,7 @@ impl TuiState {
                 item.text.split('\n').map(|part| {
                     let style = match item.entry_type {
                         LogEntryType::Thinking => Style::default().fg(Color::DarkGray),
-                        LogEntryType::ToolCall => Style::default().fg(Color::Yellow),
+                        LogEntryType::ToolCall(_) => Style::default().fg(Color::Yellow),
                         LogEntryType::ToolResult => Style::default().fg(Color::Green),
                         LogEntryType::Dump => Style::default().fg(Color::Cyan),
                         LogEntryType::EndOfReply => Style::default().fg(Color::Blue),
