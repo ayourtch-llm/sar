@@ -459,9 +459,9 @@ function updateGraph(data, initial = false) {
         showTopicMenu(d.id, event.pageX, event.pageY);
         return;
       }
-      // Regular click: subscribe to this single topic (replaces all others)
-      for (const t of [...subscribedTopics]) unsubscribeFromTopic(t);
-      subscribeToTopic(d.id);
+      // Regular click: subscribe if not yet subscribed, always show viewer
+      if (!subscribedTopics.has(d.id)) subscribeToTopic(d.id);
+      else openViewer();
     })
     .on('contextmenu', (event, d) => {
       event.preventDefault();
