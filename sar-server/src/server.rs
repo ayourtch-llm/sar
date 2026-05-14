@@ -1,11 +1,12 @@
 use axum::{
-    extract::State,
+    extract::{State, Path},
     http::StatusCode,
-    response::Html,
+    response::{Html, sse::{Sse, Event}},
     Json,
     routing::{get, post},
     Router,
 };
+use futures::stream::{Stream};
 use sar_core::bus::SarBus;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
@@ -51,6 +52,11 @@ pub struct PublishResponse {
 #[derive(Debug, Serialize)]
 pub struct ServerState {
     topics: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SerdeState {
+    error: String,
 }
 
 pub async fn list_topics(State(bus): State<SarBus>) -> Json<Vec<TopicInfo>> {
@@ -164,7 +170,49 @@ pub async fn list_announced_topics(State(bus): State<SarBus>) -> Json<Vec<TopicA
     }).collect())
 }
 
+/// SSE endpoint: subscribes to a bus topic and streams every message as a JSON SSE event.
+/// Clients should use `EventSource` to connect to `/api/stream/{topic}`.
+/// Messages are sent as `data: <json>\n\n` events.
+pub async fn stream_topic(
+    State(bus): State<SarBus>,
+    Path(topic): Path<String>,
+) -> Result<
+    Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>,
+    (StatusCode, Json<SerdeState>),
+>
+{
+    let rx = bus.subscribe_stream(&topic).await
+        .map_err(|e| {
+            (StatusCode::NOT_FOUND, Json(SerdeState {
+                error: e.to_string(),
+            }))
+        })?;
+
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Ok(msg) => {
+                let payload = serde_json::to_string(&msg).unwrap_or_default();
+                let event = Event::default().data(payload);
+                Some((Ok::<_, std::convert::Infallible>(event), rx))
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                Some((Ok::<_, std::convert::Infallible>(Event::default().comment("skipped lagged")), rx))
+            }
+        }
+    });
+
+    Ok(Sse::new(stream))
+}
+
 pub async fn run_server(bus: SarBus, host: String, port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Register server as an announced actor so it can subscribe to topics
+    bus.register_announcement(sar_core::actor::ActorAnnouncement {
+        id: "sar-server".to_string(),
+        subscriptions: vec![],
+        publications: vec!["sar:server".to_string()],
+    }).await;
+
     let app = Router::new()
         .route("/", get(index))
         .route("/api/topics", get(list_topics))
@@ -172,6 +220,7 @@ pub async fn run_server(bus: SarBus, host: String, port: u16) -> Result<(), Box<
         .route("/api/announced", get(list_announced_actors))
         .route("/api/announced-topics", get(list_announced_topics))
         .route("/api/publish", post(publish))
+        .route("/api/stream/{topic}", get(stream_topic))
         .route("/health", get(health))
         .with_state(bus)
         .layer(CorsLayer::permissive());

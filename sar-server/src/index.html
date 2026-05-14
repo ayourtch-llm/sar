@@ -53,6 +53,38 @@
   .link-arrow-pub { fill: #3fb950; }
   .link-arrow-sub { fill: #d29922; }
   #status { font-size: 11px; color: #8b949e; }
+  /* Message viewer panel */
+  #msg-viewer {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
+    background: #161b22; border-top: 1px solid #30363d;
+    height: 40vh; display: none; flex-direction: column;
+  }
+  #msg-viewer.open { display: flex; }
+  #msg-viewer #viewer-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px; border-bottom: 1px solid #30363d; flex-shrink: 0;
+  }
+  #msg-viewer #viewer-header h3 {
+    font-size: 14px; font-weight: 600; color: #58a6ff;
+  }
+  #msg-viewer #viewer-header button {
+    background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
+    padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
+  }
+  #msg-viewer #viewer-header button:hover { background: #30363d; }
+  #msg-viewer #msg-list {
+    overflow-y: auto; padding: 8px 16px; flex: 1;
+  }
+  #msg-viewer #msg-list .msg-entry {
+    padding: 6px 8px; border-bottom: 1px solid #21262d;
+    font-size: 13px; display: flex; gap: 8px;
+  }
+  #msg-viewer #msg-list .msg-entry .msg-topic { color: #58a6ff; font-weight: 500; min-width: 120px; }
+  #msg-viewer #msg-list .msg-entry .msg-source { color: #d29922; min-width: 80px; }
+  #msg-viewer #msg-list .msg-entry .msg-payload { color: #c9d1d9; flex: 1; white-space: pre-wrap; word-break: break-all; }
+  #msg-viewer #msg-list .msg-entry .msg-time { color: #8b949e; font-size: 11px; min-width: 60px; }
+  /* Topic highlight when selected */
+  .node-topic-selected ellipse { stroke: #fefe6a !important; stroke-width: 3 !important; }
 </style>
 </head>
 <body>
@@ -72,6 +104,13 @@
   <div><span class="shape" style="width:24px;height:2px;background:#d29922;position:relative"><span style="position:absolute;left:-4px;top:-4px;border:5px solid transparent;border-right:6px solid #d29922"></span></span> Subscribes to</div>
 </div>
 <svg id="graph"></svg>
+<div id="msg-viewer">
+  <div id="viewer-header">
+    <h3 id="viewer-title">Messages</h3>
+    <button id="btn-close-viewer">Close</button>
+  </div>
+  <div id="msg-list"></div>
+</div>
 
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <script>
@@ -79,10 +118,11 @@ const API_BASE = window.location.origin;
 let showPub = true, showSub = true, showLabels = true;
 let simulation, svg, g, linkSel, linkLabelSel, nodeSel, nodeLabelSel;
 let width, height;
+let selectedTopic = null;
+let eventSource = null;
 let dragstarted = (e, d) => {
   d.fx = d.x; d.fy = d.y;
   if (!simulation.running) {
-    // Unfreeze all nodes and restart
     for (const n of simulation.nodes()) { n.fx = null; n.fy = null; }
     simulation.alpha(0.5).restart();
   }
@@ -98,6 +138,43 @@ function shortenId(id) {
   if (id.startsWith('mcp-')) return id.slice(4);
   return id;
 }
+
+function openTopicStream(topicName) {
+  if (eventSource) { eventSource.close(); }
+  selectedTopic = topicName;
+  document.getElementById('msg-viewer').classList.add('open');
+  document.getElementById('viewer-title').textContent = `Topic: ${topicName}`;
+  document.getElementById('msg-list').innerHTML = '';
+  // Connect SSE
+  const url = `${API_BASE}/api/stream/${encodeURIComponent(topicName)}`;
+  eventSource = new EventSource(url);
+  eventSource.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    const timeStr = new Date().toLocaleTimeString();
+    const viewer = document.getElementById('msg-list');
+    const entry = document.createElement('div');
+    entry.className = 'msg-entry';
+    entry.innerHTML = `<span class="msg-time">${timeStr}</span><span class="msg-topic">${msg.topic}</span><span class="msg-source">${msg.source}</span><span class="msg-payload">${JSON.stringify(msg.payload)}</span>`;
+    viewer.appendChild(entry);
+    viewer.scrollTop = viewer.scrollHeight;
+  };
+  eventSource.onerror = () => {
+    // Auto-reconnect is handled by EventSource
+  };
+  // Highlight the selected topic node
+  d3.selectAll('.node-topic-selected').classed('node-topic-selected', false);
+  d3.selectAll('.node').filter(d => d.type === 'topic' && d.id === topicName)
+    .classed('node-topic-selected', true);
+}
+
+function closeTopicStream() {
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  selectedTopic = null;
+  document.getElementById('msg-viewer').classList.remove('open');
+  d3.selectAll('.node-topic-selected').classed('node-topic-selected', false);
+}
+
+document.getElementById('btn-close-viewer').addEventListener('click', closeTopicStream);
 
 async function loadData() {
   const [actorsRes, topicsRes] = await Promise.all([
@@ -274,7 +351,12 @@ function updateGraph(data, initial = false) {
 
   nodeEnter.filter(d => d.type === 'topic')
     .append('ellipse').attr('class', 'node-ellipse')
-    .attr('rx', 40).attr('ry', 16);
+    .attr('rx', 40).attr('ry', 16)
+    .on('click', (event, d) => {
+      if (selectedTopic === d.id) { closeTopicStream(); }
+      else { openTopicStream(d.id); }
+    })
+    .style('cursor', 'pointer');
 
   const nodeMerge = nodeEnter.merge(nodeSel);
   nodeSel = nodeMerge;

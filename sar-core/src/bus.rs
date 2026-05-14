@@ -100,6 +100,22 @@ impl SarBus {
         }
     }
 
+    /// Subscribe to a topic without registering an actor — for external consumers like SSE.
+    /// Returns a broadcast receiver that starts receiving from the next message onward.
+    pub async fn subscribe_stream(&self, topic: &str) -> Result<broadcast::Receiver<Message>, BusError> {
+        let capacity = 1000;
+        self.ensure_topic(topic, capacity).await;
+        let topics = self.topics.read().await;
+        match topics.get(topic) {
+            Some((sender, _)) => {
+                let receiver = sender.subscribe();
+                debug!("External stream subscribed to topic: {}", topic);
+                Ok(receiver)
+            }
+            None => Err(BusError::UnknownTopic(topic.to_string())),
+        }
+    }
+
     pub async fn list_topics(&self) -> Vec<String> {
         let topics = self.topics.read().await;
         topics.keys().cloned().collect()
