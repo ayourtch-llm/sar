@@ -452,12 +452,20 @@ function updateGraph(data, initial = false) {
   nodeEnter.filter(d => d.type === 'topic')
     .append('ellipse').attr('class', 'node-ellipse')
     .attr('rx', 40).attr('ry', 16)
-    .style('cursor', 'context-menu')
+    .style('cursor', 'pointer')
     .on('click', (event, d) => {
       if (event.altKey || event.metaKey || event.ctrlKey) {
         event.preventDefault();
         showTopicMenu(d.id, event.pageX, event.pageY);
+        return;
       }
+      // Regular click: subscribe to this single topic (replaces all others)
+      for (const t of [...subscribedTopics]) unsubscribeFromTopic(t);
+      subscribeToTopic(d.id);
+    })
+    .on('contextmenu', (event, d) => {
+      event.preventDefault();
+      showTopicMenu(d.id, event.pageX, event.pageY);
     });
 
   const nodeMerge = nodeEnter.merge(nodeSel);
