@@ -83,8 +83,22 @@
   #msg-viewer #msg-list .msg-entry .msg-source { color: #d29922; min-width: 80px; }
   #msg-viewer #msg-list .msg-entry .msg-payload { color: #c9d1d9; flex: 1; white-space: pre-wrap; word-break: break-all; }
   #msg-viewer #msg-list .msg-entry .msg-time { color: #8b949e; font-size: 11px; min-width: 60px; }
-  /* Topic highlight when selected */
-  .node-topic-selected ellipse { stroke: #fefe6a !important; stroke-width: 3 !important; }
+  /* Topic highlight when subscribed */
+  .node-topic-subscribed ellipse { stroke: #fefe6a !important; stroke-width: 3 !important; fill: #2e8a6e !important; }
+  /* Popup menu */
+  #topic-menu {
+    position: fixed; z-index: 30; display: none;
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 0; font-size: 13px; min-width: 160px;
+  }
+  #topic-menu.open { display: block; }
+  #topic-menu .menu-item {
+    padding: 8px 16px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  }
+  #topic-menu .menu-item:hover { background: #21262d; }
+  #topic-menu .menu-item .check { color: #3fb950; font-weight: 600; width: 20px; }
+  #topic-menu .menu-item .uncheck { color: #d29922; font-weight: 600; width: 20px; }
+  #topic-menu .menu-divider { border-top: 1px solid #30363d; margin: 0; }
 </style>
 </head>
 <body>
@@ -104,10 +118,19 @@
   <div><span class="shape" style="width:24px;height:2px;background:#d29922;position:relative"><span style="position:absolute;left:-4px;top:-4px;border:5px solid transparent;border-right:6px solid #d29922"></span></span> Subscribes to</div>
 </div>
 <svg id="graph"></svg>
+<div id="topic-menu">
+  <div class="menu-item" id="menu-subscribe">
+    <span class="check" id="menu-check-icon">✓</span>
+    <span id="menu-text">Subscribe</span>
+  </div>
+  <div class="menu-divider"></div>
+  <div class="menu-item" id="menu-unsubscribe">Unsubscribe All</div>
+</div>
 <div id="msg-viewer">
   <div id="viewer-header">
-    <h3 id="viewer-title">Messages</h3>
-    <button id="btn-close-viewer">Close</button>
+    <h3 id="viewer-title">Live Log</h3>
+    <span id="viewer-sub-count" style="font-size:12px;color:#8b949e"></span>
+    <button id="btn-close-viewer">Close All</button>
   </div>
   <div id="msg-list"></div>
 </div>
@@ -118,19 +141,13 @@ const API_BASE = window.location.origin;
 let showPub = true, showSub = true, showLabels = true;
 let simulation, svg, g, linkSel, linkLabelSel, nodeSel, nodeLabelSel;
 let width, height;
-let selectedTopic = null;
-let eventSource = null;
-let dragstarted = (e, d) => {
-  d.fx = d.x; d.fy = d.y;
-  if (!simulation.running) {
-    for (const n of simulation.nodes()) { n.fx = null; n.fy = null; }
-    simulation.alpha(0.5).restart();
-  }
-};
-let dragged = (e, d) => { d.fx = e.x; d.fy = e.y; };
-let dragended = (e, d) => {
-  d.fx = null; d.fy = null;
-};
+// Multi-subscription state
+let subscribedTopics = new Set();  // Set<topicName>
+let activeSseConnections = {};     // topicName → EventSource
+
+// Context menu state
+let menuTopic = null;
+let menuShow = null;
 
 function shortenId(id) {
   if (id.startsWith('sar-')) return id.slice(4);
@@ -139,16 +156,17 @@ function shortenId(id) {
   return id;
 }
 
-function openTopicStream(topicName) {
-  if (eventSource) { eventSource.close(); }
-  selectedTopic = topicName;
-  document.getElementById('msg-viewer').classList.add('open');
-  document.getElementById('viewer-title').textContent = `Topic: ${topicName}`;
-  document.getElementById('msg-list').innerHTML = '';
-  // Connect SSE
+// ---------- Subscription management ----------
+function subscribeToTopic(topicName) {
+  if (subscribedTopics.has(topicName)) return;
+  subscribedTopics.add(topicName);
+  updateSubscribedNodes();
+
+  // Connect SSE for this topic
   const url = `${API_BASE}/api/stream/${encodeURIComponent(topicName)}`;
-  eventSource = new EventSource(url);
-  eventSource.onmessage = (e) => {
+  const es = new EventSource(url);
+  activeSseConnections[topicName] = es;
+  es.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     const timeStr = new Date().toLocaleTimeString();
     const viewer = document.getElementById('msg-list');
@@ -158,23 +176,93 @@ function openTopicStream(topicName) {
     viewer.appendChild(entry);
     viewer.scrollTop = viewer.scrollHeight;
   };
-  eventSource.onerror = () => {
-    // Auto-reconnect is handled by EventSource
-  };
-  // Highlight the selected topic node
-  d3.selectAll('.node-topic-selected').classed('node-topic-selected', false);
-  d3.selectAll('.node').filter(d => d.type === 'topic' && d.id === topicName)
-    .classed('node-topic-selected', true);
+  es.onerror = () => {};
+  openViewer();
 }
 
-function closeTopicStream() {
-  if (eventSource) { eventSource.close(); eventSource = null; }
-  selectedTopic = null;
+function unsubscribeFromTopic(topicName) {
+  if (!subscribedTopics.has(topicName)) return;
+  subscribedTopics.delete(topicName);
+  // Close its SSE connection
+  const es = activeSseConnections[topicName];
+  if (es) { es.close(); delete activeSseConnections[topicName]; }
+  updateSubscribedNodes();
+  if (subscribedTopics.size === 0) closeViewer();
+  else updateViewerTitle();
+}
+
+function toggleSubscription(topicName) {
+  if (subscribedTopics.has(topicName)) unsubscribeFromTopic(topicName);
+  else subscribeToTopic(topicName);
+}
+
+function updateSubscribedNodes() {
+  // Remove highlight from all topics
+  d3.selectAll('.node-topic-subscribed').classed('node-topic-subscribed', false);
+  // Add highlight to subscribed topics
+  for (const t of subscribedTopics) {
+    d3.selectAll('.node').filter(d => d.type === 'topic' && d.id === t)
+      .classed('node-topic-subscribed', true);
+  }
+}
+
+function openViewer() {
+  document.getElementById('msg-viewer').classList.add('open');
+  updateViewerTitle();
+}
+
+function closeViewer() {
   document.getElementById('msg-viewer').classList.remove('open');
-  d3.selectAll('.node-topic-selected').classed('node-topic-selected', false);
 }
 
-document.getElementById('btn-close-viewer').addEventListener('click', closeTopicStream);
+function updateViewerTitle() {
+  const count = subscribedTopics.size;
+  document.getElementById('viewer-title').textContent = count === 0 ? 'Live Log' : `Live Log (${count})`;
+  document.getElementById('viewer-sub-count').textContent = 
+    count === 0 ? '' : [...subscribedTopics].join(', ');
+}
+
+// ---------- Context menu ----------
+function showTopicMenu(topicName, x, y) {
+  menuTopic = topicName;
+  menuShow = true;
+  const menu = document.getElementById('topic-menu');
+  menu.classList.add('open');
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+
+  const isSubbed = subscribedTopics.has(topicName);
+  document.getElementById('menu-text').textContent = isSubbed ? 'Unsubscribe' : 'Subscribe';
+  document.getElementById('menu-check-icon').textContent = isSubbed ? '✗' : '✓';
+  document.getElementById('menu-subscribe').style.color = isSubbed ? '#d29922' : '#3fb950';
+}
+
+function hideTopicMenu() {
+  menuTopic = null;
+  menuShow = false;
+  document.getElementById('topic-menu').classList.remove('open');
+}
+
+document.getElementById('menu-subscribe').addEventListener('click', () => {
+  if (menuTopic) toggleSubscription(menuTopic);
+  hideTopicMenu();
+});
+
+document.getElementById('menu-unsubscribe').addEventListener('click', () => {
+  hideTopicMenu();
+  // Unsubscribe all currently subscribed topics
+  for (const t of [...subscribedTopics]) unsubscribeFromTopic(t);
+});
+
+document.getElementById('btn-close-viewer').addEventListener('click', () => {
+  for (const t of [...subscribedTopics]) unsubscribeFromTopic(t);
+  closeViewer();
+});
+
+// Close menu when clicking outside
+document.addEventListener('click', (e) => {
+  if (menuShow && !document.getElementById('topic-menu').contains(e.target)) hideTopicMenu();
+});
 
 async function loadData() {
   const [actorsRes, topicsRes] = await Promise.all([
@@ -308,6 +396,18 @@ function initGraph() {
   });
 }
 
+let dragstarted = (e, d) => {
+  d.fx = d.x; d.fy = d.y;
+  if (!simulation.running) {
+    for (const n of simulation.nodes()) { n.fx = null; n.fy = null; }
+    simulation.alpha(0.5).restart();
+  }
+};
+let dragged = (e, d) => { d.fx = e.x; d.fy = e.y; };
+let dragended = (e, d) => {
+  d.fx = null; d.fy = null;
+};
+
 function updateGraph(data, initial = false) {
   const graph = buildGraph(data);
 
@@ -352,11 +452,13 @@ function updateGraph(data, initial = false) {
   nodeEnter.filter(d => d.type === 'topic')
     .append('ellipse').attr('class', 'node-ellipse')
     .attr('rx', 40).attr('ry', 16)
+    .style('cursor', 'context-menu')
     .on('click', (event, d) => {
-      if (selectedTopic === d.id) { closeTopicStream(); }
-      else { openTopicStream(d.id); }
-    })
-    .style('cursor', 'pointer');
+      if (event.altKey || event.metaKey || event.ctrlKey) {
+        event.preventDefault();
+        showTopicMenu(d.id, event.pageX, event.pageY);
+      }
+    });
 
   const nodeMerge = nodeEnter.merge(nodeSel);
   nodeSel = nodeMerge;
