@@ -492,8 +492,21 @@ function updateGraph(data, initial = false) {
     simulation.force('link').links(graph.links);
     simulation.alpha(0.3);
   } else {
-    // Refresh: only update links, preserve node positions
+    // Refresh: preserve node positions, update simulation node references
+    const nodeById = new Map(simulation.nodes().map(n => [n.id, n]));
+    for (const n of graph.nodes) {
+      const old = nodeById.get(n.id);
+      if (old) {
+        n.x = old.x;
+        n.y = old.y;
+        n.fx = old.fx;
+        n.fy = old.fy;
+      }
+    }
+
+    simulation.nodes(graph.nodes);
     simulation.force('link').links(graph.links);
+    simulation.alpha(0.3);
   }
 
   linkSel.style('display', d => {
