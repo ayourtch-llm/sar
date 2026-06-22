@@ -26,6 +26,7 @@ async fn test_llm_test_actor_publishes_to_llm() {
             api_key: "sk-test".to_string(),
             temperature: 0.7,
             max_tokens: 65536,
+            ..Default::default()
         },
     );
 
@@ -81,6 +82,7 @@ async fn test_llm_test_actor_receives_output() {
             api_key: "sk-test".to_string(),
             temperature: 0.7,
             max_tokens: 65536,
+            ..Default::default()
         },
     );
 
@@ -136,6 +138,7 @@ async fn test_llm_test_actor_receives_stream() {
             api_key: "sk-test".to_string(),
             temperature: 0.7,
             max_tokens: 65536,
+            ..Default::default()
         },
     );
 
@@ -211,6 +214,7 @@ async fn test_llm_test_actor_multiple_requests() {
             api_key: "sk-test".to_string(),
             temperature: 0.7,
             max_tokens: 65536,
+            ..Default::default()
         },
     );
 

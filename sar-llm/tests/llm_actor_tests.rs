@@ -25,6 +25,7 @@ async fn setup_test_actors(mock_url: &str) -> (
             api_key: "sk-test".to_string(),
             temperature: 0.7,
             max_tokens: 65536,
+            ..Default::default()
         },
     );
 
@@ -77,6 +78,7 @@ async fn test_llm_actor_config_override() {
             api_key: "sk-custom".to_string(),
             temperature: 1.0,
             max_tokens: 100,
+            ..Default::default()
         }),
     };
 

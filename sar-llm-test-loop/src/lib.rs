@@ -124,6 +124,10 @@ impl Actor for LlmTestLoopActor {
                                         api_key: String::new(),
                                         temperature: 0.7,
                                         max_tokens: 65536,
+                                        request_timeout_secs: 0,
+                                        stream_timeout_secs: 0,
+                                        max_retries: 0,
+                                        retry_base_delay_ms: 0,
                                     })
                                 },
                                 tools: if self.grammar.lock().unwrap().is_some() { None } else { None },
