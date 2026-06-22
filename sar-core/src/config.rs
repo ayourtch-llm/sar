@@ -135,6 +135,14 @@ pub struct LlmConfig {
     pub temperature: f32,
     #[serde(default = "default_llm_max_tokens")]
     pub max_tokens: i32,
+    #[serde(default = "default_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+    #[serde(default = "default_stream_timeout_secs")]
+    pub stream_timeout_secs: u64,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    #[serde(default = "default_retry_base_delay_ms")]
+    pub retry_base_delay_ms: u64,
 }
 
 impl Default for LlmConfig {
@@ -145,6 +153,10 @@ impl Default for LlmConfig {
             api_key: default_llm_api_key(),
             temperature: default_llm_temperature(),
             max_tokens: default_llm_max_tokens(),
+            request_timeout_secs: default_request_timeout_secs(),
+            stream_timeout_secs: default_stream_timeout_secs(),
+            max_retries: default_max_retries(),
+            retry_base_delay_ms: default_retry_base_delay_ms(),
         }
     }
 }
@@ -260,6 +272,22 @@ fn default_llm_temperature() -> f32 {
 
 fn default_llm_max_tokens() -> i32 {
     65536
+}
+
+fn default_request_timeout_secs() -> u64 {
+    120
+}
+
+fn default_stream_timeout_secs() -> u64 {
+    300
+}
+
+fn default_max_retries() -> u32 {
+    3
+}
+
+fn default_retry_base_delay_ms() -> u64 {
+    500
 }
 
 fn default_ui_hub_name() -> String {
