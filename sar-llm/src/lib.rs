@@ -1,12 +1,55 @@
-use async_trait::async_trait;
 use futures::StreamExt;
 use sar_core::actor::Actor;
 use sar_core::bus::SarBus;
 use sar_core::config::LlmConfig;
 use sar_core::message::Message;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, error, info, warn};
+
+/// Structured error type for LLM operations.
+#[derive(Debug, thiserror::Error)]
+pub enum LlmError {
+    #[error("Network error: {0}")]
+    Network(String),
+    #[error("Request timeout after {0} seconds")]
+    Timeout(u64),
+    #[error("API error {status}: {body}")]
+    Api { status: u16, body: String },
+    #[error("Stream error: {0}")]
+    Stream(String),
+    #[error("Stream interrupted: partial response ({0} chars), last error: {1}")]
+    StreamInterrupted(usize, String),
+    #[error("Other: {0}")]
+    Other(String),
+}
+
+impl LlmError {
+    /// Returns true if this error is transient and should be retried.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            LlmError::Network(_) => true,
+            LlmError::Timeout(_) => true,
+            LlmError::Api { status, .. } => *status == 429 || *status >= 500,
+            LlmError::Stream(_) => true,
+            LlmError::StreamInterrupted(_, _) => false,
+            LlmError::Other(_) => false,
+        }
+    }
+}
+
+/// Checks if a reqwest error is retryable (network, timeout, connection).
+fn is_retryable_reqwest_error(err: &reqwest::Error) -> bool {
+    if err.is_timeout() || err.is_connect() {
+        return true;
+    }
+    if let Some(status) = err.status() {
+        return status.as_u16() == 429 || status.as_u16() >= 500;
+    }
+    // Body/decode errors during streaming are not retryable after streaming starts
+    false
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRequest {
@@ -61,15 +104,16 @@ impl LlmActor {
                 api_key: if req.api_key.is_empty() { self.config.api_key.clone() } else { req.api_key },
                 temperature: req.temperature,
                 max_tokens: if req.max_tokens == 0 { self.config.max_tokens } else { req.max_tokens },
+                request_timeout_secs: if req.request_timeout_secs == 0 { self.config.request_timeout_secs } else { req.request_timeout_secs },
+                stream_timeout_secs: if req.stream_timeout_secs == 0 { self.config.stream_timeout_secs } else { req.stream_timeout_secs },
+                max_retries: if req.max_retries == 0 { self.config.max_retries } else { req.max_retries },
+                retry_base_delay_ms: if req.retry_base_delay_ms == 0 { self.config.retry_base_delay_ms } else { req.retry_base_delay_ms },
             },
             None => self.config.clone(),
         }
     }
 
-    async fn send_request(&self, config: &LlmConfig, messages: &[serde_json::Value], tools: Option<&[serde_json::Value]>, grammar: Option<&str>, bus: &SarBus) -> Result<(String, Vec<serde_json::Value>), Box<dyn std::error::Error + Send + Sync>> {
-        let stream_id = uuid::Uuid::new_v4().to_string();
-        let client = reqwest::Client::new();
-        
+    fn build_request_body(&self, config: &LlmConfig, messages: &[serde_json::Value], tools: Option<&[serde_json::Value]>, grammar: Option<&str>) -> serde_json::Value {
         let mut body = serde_json::json!({
             "model": config.model,
             "messages": messages,
@@ -83,170 +127,88 @@ impl LlmActor {
         if let Some(grammar_str) = grammar {
             body["grammar"] = serde_json::json!(grammar_str);
         }
+        body
+    }
 
-        let dump = format!("=== LLM Request (index={}) ===\n{}\n=================\n", self.index, serde_json::to_string_pretty(&body).unwrap());
-        if let Err(e) = std::fs::write("/tmp/sar.txt", &dump) {
-            error!("Failed to write dump to /tmp/sar.txt: {}", e);
-        }
-        
-        debug!("[llm{}] Sending request to API (model={}, messages={})", 
-               self.index, config.model, body["messages"].as_array().map(|a| a.len()).unwrap_or(0));
+    async fn send_http_request_with_retry(
+        &self,
+        config: &LlmConfig,
+        body: &serde_json::Value,
+    ) -> Result<reqwest::Response, LlmError> {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| LlmError::Other(format!("Failed to create HTTP client: {}", e)))?;
 
-        let response = client
-            .post(format!("{}/chat/completions", config.base_url))
-            .header("Authorization", format!("Bearer {}", config.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+        let mut attempt = 0u32;
+        let mut delay = Duration::from_millis(config.retry_base_delay_ms);
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("API error {}: {}", status, body).into());
-        }
+        loop {
+            debug!("[llm{}] Sending request to API (model={}, messages={}, attempt={})",
+                   self.index, config.model,
+                   body["messages"].as_array().map(|a| a.len()).unwrap_or(0),
+                   attempt + 1);
 
-        let mut full_response = String::new();
-        let mut stream = response.bytes_stream();
-        let mut rxtokens: usize = 0;
-        let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-        let mut tool_call_accumulators: std::collections::HashMap<usize, (String, String, String)> = std::collections::HashMap::new();
+            let request = client
+                .post(format!("{}/chat/completions", config.base_url))
+                .header("Authorization", format!("Bearer {}", config.api_key))
+                .header("Content-Type", "application/json")
+                .json(body);
 
-        while let Some(chunk) = stream.next().await {
-            let chunk = match chunk {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("Stream error: {}", e);
-                    break;
+            match tokio::time::timeout(
+                Duration::from_secs(config.request_timeout_secs),
+                request.send(),
+            ).await {
+                Ok(Ok(response)) => {
+                    if !response.status().is_success() {
+                        let status = response.status();
+                        let body = response.text().await.unwrap_or_default();
+                        let err = LlmError::Api { status: status.as_u16(), body };
+                        if err.is_retryable() && attempt < config.max_retries {
+                            warn!("[llm{}] Request failed (attempt {}/{}, status {}), retrying in {:?}",
+                                   self.index, attempt + 1, config.max_retries, status.as_u16(), delay);
+                            tokio::time::sleep(delay).await;
+                            delay = delay.saturating_mul(2);
+                            attempt += 1;
+                            continue;
+                        }
+                        return Err(err);
+                    }
+                    return Ok(response);
                 }
-            };
-            let text = String::from_utf8_lossy(&chunk);
-            
-            for line in text.lines() {
-                if let Some(data) = line.strip_prefix("data: ") {
-                    if data == "[DONE]" {
+                Ok(Err(e)) => {
+                    let err_str = e.to_string();
+                    if is_retryable_reqwest_error(&e) && attempt < config.max_retries {
+                        warn!("[llm{}] Request failed (attempt {}/{}), retrying in {:?}: {}",
+                               self.index, attempt + 1, config.max_retries, delay, err_str);
+                        tokio::time::sleep(delay).await;
+                        delay = delay.saturating_mul(2);
+                        attempt += 1;
                         continue;
                     }
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                        if let Some(reasoning) = json["choices"][0]["delta"]["reasoning_content"].as_str() {
-                            if !reasoning.is_empty() {
-                                rxtokens += reasoning.chars().count();
-                                let chunk_msg = Message::new(
-                                    &self.stream_topic,
-                                    &self.id(),
-                                    reasoning.to_string(),
-                                ).with_type("LlmThinking").with_stream_id(stream_id.clone());
-                                if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
-                                    error!("Failed to publish thinking chunk: {}", e);
-                                }
-                            }
-                        }
-                        if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
-                            if !content.is_empty() {
-                                rxtokens += content.chars().count();
-                                let mut remaining = content.to_string();
-                                while let Some(think_start) = remaining.find("<thinking>") {
-                                    let thinking_content = &remaining[..think_start];
-                                    if !thinking_content.is_empty() {
-                                        let chunk_msg = Message::new(
-                                            &self.stream_topic,
-                                            &self.id(),
-                                            thinking_content.to_string(),
-                                        ).with_type("LlmStream").with_stream_id(stream_id.clone());
-                                        if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
-                                            error!("Failed to publish stream chunk: {}", e);
-                                        }
-                                        full_response.push_str(thinking_content);
-                                    }
-                                    remaining = remaining[think_start + "<thinking>".len()..].to_string();
-                                }
-                                if let Some(think_end) = remaining.find("</thinking>") {
-                                    let thinking_content = &remaining[..think_end];
-                                    if !thinking_content.is_empty() {
-                                        let chunk_msg = Message::new(
-                                            &self.stream_topic,
-                                            &self.id(),
-                                            thinking_content.to_string(),
-                                        ).with_type("LlmThinking").with_stream_id(stream_id.clone());
-                                        if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
-                                            error!("Failed to publish thinking chunk: {}", e);
-                                        }
-                                    }
-                                    remaining = remaining[think_end + "</thinking>".len()..].to_string();
-                                }
-                                if !remaining.is_empty() {
-                                    let chunk_msg = Message::new(
-                                        &self.stream_topic,
-                                        &self.id(),
-                                        remaining.to_string(),
-                                    ).with_type("LlmStream").with_stream_id(stream_id.clone());
-                                    if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
-                                        error!("Failed to publish stream chunk: {}", e);
-                                    }
-                                    full_response.push_str(&remaining);
-                                }
-                            }
-                        }
-                        if let Some(tool_calls_arr) = json["choices"][0]["delta"]["tool_calls"].as_array() {
-                            for tool_call in tool_calls_arr {
-                                if let Some(index) = tool_call["index"].as_u64() {
-                                    let idx = index as usize;
-                                    let name = tool_call["function"]["name"].as_str().unwrap_or("");
-                                    let args = tool_call["function"]["arguments"].as_str().unwrap_or("");
-                                    let call_id = tool_call["id"].as_str().unwrap_or("");
-                                    if !name.is_empty() {
-                                        tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).0.push_str(name);
-                                    }
-                                    if !args.is_empty() {
-                                        tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).1.push_str(args);
-                                    }
-                                    if !call_id.is_empty() {
-                                        tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).2.push_str(call_id);
-                                    }
-                                    let (func_name, func_args, func_call_id) = tool_call_accumulators.get(&idx).unwrap();
-                                    let tc_msg = Message::new(
-                                        &self.tool_calls_topic,
-                                        &self.id(),
-                                        serde_json::json!({
-                                            "index": idx,
-                                            "id": func_call_id,
-                                            "function": {
-                                                "name": func_name,
-                                                "arguments": func_args,
-                                            }
-                                        }),
-                                    ).with_type("LlmToolCall").with_stream_id(stream_id.clone());
-                                    if let Err(e) = bus.publish(&self.id(), tc_msg).await {
-                                        error!("Failed to publish tool call chunk: {}", e);
-                                    }
-                                    let stream_tc_msg = Message::new(
-                                        &self.stream_topic,
-                                        &self.id(),
-                                        serde_json::json!({
-                                            "index": idx,
-                                            "id": func_call_id,
-                                            "function": {
-                                                "name": func_name,
-                                                "arguments": func_args,
-                                            }
-                                        }),
-                                    ).with_type("LlmToolCall").with_stream_id(stream_id.clone());
-                                    if let Err(e) = bus.publish(&self.id(), stream_tc_msg).await {
-                                        error!("Failed to publish tool call stream chunk: {}", e);
-                                    }
-                                }
-                            }
-                        }
+                    return Err(LlmError::Network(err_str));
+                }
+                Err(_) => {
+                    if attempt < config.max_retries {
+                        warn!("[llm{}] Request timed out after {}s (attempt {}/{}), retrying in {:?}",
+                               self.index, config.request_timeout_secs, attempt + 1, config.max_retries, delay);
+                        tokio::time::sleep(delay).await;
+                        delay = delay.saturating_mul(2);
+                        attempt += 1;
+                        continue;
                     }
+                    return Err(LlmError::Timeout(config.request_timeout_secs));
                 }
             }
         }
+    }
 
+    async fn publish_stream_end_and_stats(&self, bus: &SarBus, stream_id: &str, rxtokens: usize) {
         let end_msg = Message::new(
             &self.stream_topic,
             &self.id(),
             serde_json::json!({"type": "stream_end"}),
-        ).with_type("LlmStreamEnd").with_stream_id(stream_id.clone());
+        ).with_type("LlmStreamEnd").with_stream_id(stream_id.to_string());
         if let Err(e) = bus.publish(&self.id(), end_msg).await {
             error!("Failed to publish stream end: {}", e);
         }
@@ -256,12 +218,171 @@ impl LlmActor {
             &self.stats_topic,
             &self.id(),
             serde_json::to_value(&StreamStats { rxtokens }).unwrap(),
-        ).with_type("StreamStats").with_stream_id(stream_id.clone());
+        ).with_type("StreamStats").with_stream_id(stream_id.to_string());
         if let Err(e) = bus.publish(&self.id(), stats_msg).await {
             error!("Failed to publish stream stats: {}", e);
         } else {
             info!("LLM actor {} published stats to '{}'", self.index, self.stats_topic);
         }
+    }
+
+    async fn stream_response(
+        &self,
+        response: reqwest::Response,
+        config: &LlmConfig,
+        bus: &SarBus,
+        stream_id: &str,
+    ) -> Result<(String, Vec<serde_json::Value>), LlmError> {
+        let mut full_response = String::new();
+        let mut stream = response.bytes_stream();
+        let mut rxtokens: usize = 0;
+        let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+        let mut tool_call_accumulators: std::collections::HashMap<usize, (String, String, String)> = std::collections::HashMap::new();
+        let stream_timeout = Duration::from_secs(config.stream_timeout_secs);
+
+        loop {
+            match tokio::time::timeout(stream_timeout, stream.next()).await {
+                Ok(Some(Ok(chunk))) => {
+                    let text = String::from_utf8_lossy(&chunk);
+                    for line in text.lines() {
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            if data == "[DONE]" {
+                                continue;
+                            }
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                                if let Some(reasoning) = json["choices"][0]["delta"]["reasoning_content"].as_str() {
+                                    if !reasoning.is_empty() {
+                                        rxtokens += reasoning.chars().count();
+                                        let chunk_msg = Message::new(
+                                            &self.stream_topic,
+                                            &self.id(),
+                                            reasoning.to_string(),
+                                        ).with_type("LlmThinking").with_stream_id(stream_id.to_string());
+                                        if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
+                                            error!("Failed to publish thinking chunk: {}", e);
+                                        }
+                                    }
+                                }
+                                if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
+                                    if !content.is_empty() {
+                                        rxtokens += content.chars().count();
+                                        let mut remaining = content.to_string();
+                                        while let Some(think_start) = remaining.find("<thinking>") {
+                                            let thinking_content = &remaining[..think_start];
+                                            if !thinking_content.is_empty() {
+                                                let chunk_msg = Message::new(
+                                                    &self.stream_topic,
+                                                    &self.id(),
+                                                    thinking_content.to_string(),
+                                                ).with_type("LlmStream").with_stream_id(stream_id.to_string());
+                                                if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
+                                                    error!("Failed to publish stream chunk: {}", e);
+                                                }
+                                                full_response.push_str(thinking_content);
+                                            }
+                                            remaining = remaining[think_start + "<thinking>".len()..].to_string();
+                                        }
+                                        if let Some(think_end) = remaining.find("</thinking>") {
+                                            let thinking_content = &remaining[..think_end];
+                                            if !thinking_content.is_empty() {
+                                                let chunk_msg = Message::new(
+                                                    &self.stream_topic,
+                                                    &self.id(),
+                                                    thinking_content.to_string(),
+                                                ).with_type("LlmThinking").with_stream_id(stream_id.to_string());
+                                                if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
+                                                    error!("Failed to publish thinking chunk: {}", e);
+                                                }
+                                            }
+                                            remaining = remaining[think_end + "</thinking>".len()..].to_string();
+                                        }
+                                        if !remaining.is_empty() {
+                                            let chunk_msg = Message::new(
+                                                &self.stream_topic,
+                                                &self.id(),
+                                                remaining.to_string(),
+                                            ).with_type("LlmStream").with_stream_id(stream_id.to_string());
+                                            if let Err(e) = bus.publish(&self.id(), chunk_msg).await {
+                                                error!("Failed to publish stream chunk: {}", e);
+                                            }
+                                            full_response.push_str(&remaining);
+                                        }
+                                    }
+                                }
+                                if let Some(tool_calls_arr) = json["choices"][0]["delta"]["tool_calls"].as_array() {
+                                    for tool_call in tool_calls_arr {
+                                        if let Some(index) = tool_call["index"].as_u64() {
+                                            let idx = index as usize;
+                                            let name = tool_call["function"]["name"].as_str().unwrap_or("");
+                                            let args = tool_call["function"]["arguments"].as_str().unwrap_or("");
+                                            let call_id = tool_call["id"].as_str().unwrap_or("");
+                                            if !name.is_empty() {
+                                                tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).0.push_str(name);
+                                            }
+                                            if !args.is_empty() {
+                                                tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).1.push_str(args);
+                                            }
+                                            if !call_id.is_empty() {
+                                                tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).2.push_str(call_id);
+                                            }
+                                            let (func_name, func_args, func_call_id) = tool_call_accumulators.get(&idx).unwrap();
+                                            let tc_msg = Message::new(
+                                                &self.tool_calls_topic,
+                                                &self.id(),
+                                                serde_json::json!({
+                                                    "index": idx,
+                                                    "id": func_call_id,
+                                                    "function": {
+                                                        "name": func_name,
+                                                        "arguments": func_args,
+                                                    }
+                                                }),
+                                            ).with_type("LlmToolCall").with_stream_id(stream_id.to_string());
+                                            if let Err(e) = bus.publish(&self.id(), tc_msg).await {
+                                                error!("Failed to publish tool call chunk: {}", e);
+                                            }
+                                            let stream_tc_msg = Message::new(
+                                                &self.stream_topic,
+                                                &self.id(),
+                                                serde_json::json!({
+                                                    "index": idx,
+                                                    "id": func_call_id,
+                                                    "function": {
+                                                        "name": func_name,
+                                                        "arguments": func_args,
+                                                    }
+                                                }),
+                                            ).with_type("LlmToolCall").with_stream_id(stream_id.to_string());
+                                            if let Err(e) = bus.publish(&self.id(), stream_tc_msg).await {
+                                                error!("Failed to publish tool call stream chunk: {}", e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(Some(Err(e))) => {
+                    error!("[llm{}] Stream error: {}", self.index, e);
+                    self.publish_stream_end_and_stats(bus, stream_id, rxtokens).await;
+                    return Err(LlmError::StreamInterrupted(full_response.len(), e.to_string()));
+                }
+                Ok(None) => {
+                    // Stream ended normally
+                    break;
+                }
+                Err(_) => {
+                    warn!("[llm{}] Stream timed out after {}s (partial response length: {})",
+                          self.index, config.stream_timeout_secs, full_response.len());
+                    self.publish_stream_end_and_stats(bus, stream_id, rxtokens).await;
+                    return Err(LlmError::StreamInterrupted(full_response.len(), "stream timeout".to_string()));
+                }
+            }
+        }
+
+        // Normal stream completion — publish stream end and stats
+        self.publish_stream_end_and_stats(bus, stream_id, rxtokens).await;
 
         for (idx, (func_name, func_args, func_call_id)) in &tool_call_accumulators {
             let full_tc = serde_json::json!({
@@ -281,11 +402,30 @@ impl LlmActor {
         } else {
             full_response.clone()
         };
-        
-        debug!("[llm{}] Received response (tool_calls={}, len={}): {}", 
+
+        debug!("[llm{}] Received response (tool_calls={}, len={}): {}",
                self.index, tool_calls.len(), full_response.len(), response_summary);
 
         Ok((full_response, tool_calls))
+    }
+
+    async fn send_request(&self, config: &LlmConfig, messages: &[serde_json::Value], tools: Option<&[serde_json::Value]>, grammar: Option<&str>, bus: &SarBus) -> Result<(String, Vec<serde_json::Value>), Box<dyn std::error::Error + Send + Sync>> {
+        let stream_id = uuid::Uuid::new_v4().to_string();
+        let body = self.build_request_body(config, messages, tools, grammar);
+
+        let dump = format!("=== LLM Request (index={}) ===\n{}\n=================\n", self.index, serde_json::to_string_pretty(&body).unwrap());
+        if let Err(e) = std::fs::write("/tmp/sar.txt", &dump) {
+            error!("Failed to write dump to /tmp/sar.txt: {}", e);
+        }
+
+        let response = self.send_http_request_with_retry(config, &body).await?;
+
+        // Stream the response with per-chunk timeout and error handling
+        self.stream_response(response, config, bus, &stream_id).await
+            .map_err(|e| {
+                error!("[llm{}] Stream failed: {}", self.index, e);
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })
     }
 }
 
