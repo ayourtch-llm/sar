@@ -5,8 +5,9 @@ use sar_core::config::LlmConfig;
 use sar_core::message::Message;
 use sar_llm::LlmRequest;
 use sar_tool_actors::ToolResultMessage;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{error, info, warn};
@@ -44,6 +45,9 @@ pub struct LlmTestLoopToolsActor {
     pub tools: StdMutex<Vec<Arc<dyn ToolActor>>>,
     pub system_message: Arc<StdMutex<String>>,
     pub grammar: Arc<StdMutex<Option<String>>>,
+    pub tool_timeout_secs: u64,
+    pub send_retry_count: u32,
+    pub send_retry_delay_ms: u64,
 }
 
 impl LlmTestLoopToolsActor {
@@ -68,6 +72,9 @@ impl LlmTestLoopToolsActor {
             tools: StdMutex::new(Vec::new()),
             system_message: Arc::new(StdMutex::new(String::new())),
             grammar: Arc::new(StdMutex::new(None)),
+            tool_timeout_secs: 300,
+            send_retry_count: 3,
+            send_retry_delay_ms: 1000,
         }
     }
 
@@ -76,11 +83,27 @@ impl LlmTestLoopToolsActor {
         self
     }
 
+    pub fn with_tool_timeout_secs(mut self, secs: u64) -> Self {
+        self.tool_timeout_secs = secs;
+        self
+    }
+
     pub fn with_system_message(message: String) -> Self {
         Self {
+            index: 0,
+            input_topic: String::new(),
+            llm_in_topic: String::new(),
+            llm_out_topic: String::new(),
+            llm_stream_topic: String::new(),
+            llm_tool_calls_topic: String::new(),
+            stream_output_topic: String::new(),
+            llm_base_url: String::new(),
+            tools: StdMutex::new(Vec::new()),
             system_message: Arc::new(StdMutex::new(message)),
             grammar: Arc::new(StdMutex::new(None)),
-            ..Self::default()
+            tool_timeout_secs: 300,
+            send_retry_count: 3,
+            send_retry_delay_ms: 1000,
         }
     }
 
@@ -210,6 +233,10 @@ impl LlmTestLoopToolsActor {
                     api_key: String::new(),
                     temperature: 0.7,
                     max_tokens: 65536,
+                    request_timeout_secs: 0,
+                    stream_timeout_secs: 0,
+                    max_retries: 0,
+                    retry_base_delay_ms: 0,
                 })
             },
             tools: if tool_defs.is_empty() || self.grammar.lock().unwrap().is_some() {
@@ -227,10 +254,27 @@ impl LlmTestLoopToolsActor {
                 .map_err(|e| format!("Failed to serialize LLM request: {}", e))?,
         );
 
-        if let Err(e) = bus.publish(&self.id(), msg).await {
-            error!("Failed to publish to LLM input: {}", e);
+        let mut attempt = 0u32;
+        loop {
+            match bus.publish(&self.id(), msg.clone()).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    if attempt < self.send_retry_count {
+                        error!(
+                            "Failed to publish to LLM input (attempt {}/{}): {}",
+                            attempt + 1, self.send_retry_count, e
+                        );
+                        tokio::time::sleep(Duration::from_millis(self.send_retry_delay_ms)).await;
+                        attempt += 1;
+                    } else {
+                        return Err(format!(
+                            "Failed to publish to LLM input after {} attempts: {}",
+                            self.send_retry_count, e
+                        ).into());
+                    }
+                }
+            }
         }
-        Ok(())
     }
 }
 
@@ -303,7 +347,9 @@ impl Actor for LlmTestLoopToolsActor {
         );
 
         let mut pending_tool_calls: HashSet<String> = HashSet::new();
+        let mut pending_tool_call_timestamps: HashMap<String, (Instant, String)> = HashMap::new();
         let mut pending_messages: Vec<String> = Vec::new();
+        let mut tool_watchdog = tokio::time::interval(Duration::from_secs(10));
 
         loop {
             tokio::select! {
@@ -448,10 +494,11 @@ impl Actor for LlmTestLoopToolsActor {
                                 }));
                             }
 
-                            // Track pending tool calls by ID
+                            // Track pending tool calls by ID and dispatch timestamp
                             for tc in &tool_calls {
                                 let tool_call_id = tc["id"].as_str().unwrap_or("");
                                 pending_tool_calls.insert(tool_call_id.to_string());
+                                pending_tool_call_timestamps.insert(tool_call_id.to_string(), (Instant::now(), tc["function"]["name"].as_str().unwrap_or("").to_string()));
 
                                 let func_name = tc["function"]["name"].as_str().unwrap_or("");
                                 let func_args_str = tc["function"]["arguments"].as_str().unwrap_or("");
@@ -464,6 +511,7 @@ impl Actor for LlmTestLoopToolsActor {
                                         error!("Failed to parse tool arguments for {}: {}", func_name, e);
                                         // Publish error result directly to tool:results
                                         pending_tool_calls.remove(tool_call_id);
+                                        pending_tool_call_timestamps.remove(tool_call_id);
                                         let error_result = ToolResultMessage {
                                             tool_call_id: tool_call_id.to_string(),
                                             tool_name: func_name.to_string(),
@@ -573,6 +621,7 @@ impl Actor for LlmTestLoopToolsActor {
                             }
 
                             pending_tool_calls.remove(&tool_result.tool_call_id);
+                            pending_tool_call_timestamps.remove(&tool_result.tool_call_id);
 
                             if pending_tool_calls.is_empty() {
                                 info!("LLM test loop tools actor {} all tool calls resolved, message count: {}", self.index, conversation_messages.lock().await.len());
@@ -601,7 +650,7 @@ impl Actor for LlmTestLoopToolsActor {
                         }
                         Err(RecvError::Lagged(n)) => {
                             warn!(
-                                "LLM test loop tools actor {} lagged behind on tool results, dropped {} messages",
+                                "LLM test loop tools actor {} lagged behind on tool results, dropped {} messages — tool results may be lost, watchdog will time out stuck calls",
                                 self.index, n
                             );
                         }
@@ -656,6 +705,82 @@ impl Actor for LlmTestLoopToolsActor {
                         }
                         Err(RecvError::Closed) => {
                             info!("LLM test loop tools actor {} grammar topic closed", self.index);
+                        }
+                    }
+                }
+                _ = tool_watchdog.tick() => {
+                    if pending_tool_calls.is_empty() {
+                        continue;
+                    }
+
+                    let now = Instant::now();
+                    let timeout_dur = Duration::from_secs(self.tool_timeout_secs);
+                    let mut timed_out: Vec<(String, String)> = Vec::new();
+
+                    for (call_id, (dispatch_time, tool_name)) in &pending_tool_call_timestamps {
+                        if now.duration_since(*dispatch_time) >= timeout_dur {
+                            timed_out.push((call_id.clone(), tool_name.clone()));
+                        }
+                    }
+
+                    if timed_out.is_empty() {
+                        continue;
+                    }
+
+                    warn!(
+                        "LLM test loop tools actor {} tool call timeout watchdog: {} calls timed out (timeout={}s)",
+                        self.index, timed_out.len(), self.tool_timeout_secs
+                    );
+
+                    for (call_id, tool_name) in &timed_out {
+                        pending_tool_calls.remove(call_id);
+                        pending_tool_call_timestamps.remove(call_id);
+
+                        warn!(
+                            "LLM test loop tools actor {} timing out tool call '{}' (tool='{}')",
+                            self.index, call_id, tool_name
+                        );
+
+                        {
+                            let mut messages = conversation_messages.lock().await;
+                            messages.push(serde_json::json!({
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "name": tool_name,
+                                "content": format!("Error: Tool call timed out after {} seconds", self.tool_timeout_secs),
+                            }));
+                        }
+
+                        let stream_msg = Message::new(
+                            &self.stream_output_topic,
+                            &self.id(),
+                            format!("  [tool_timeout] {}({}) => timed out after {}s", tool_name, call_id, self.tool_timeout_secs),
+                        ).with_type("LlmToolResult");
+                        if let Err(e) = bus.publish(&self.id(), stream_msg).await {
+                            error!("Failed to publish tool timeout stream: {}", e);
+                        }
+                    }
+
+                    if pending_tool_calls.is_empty() {
+                        info!("LLM test loop tools actor {} all tool calls resolved (via timeout), message count: {}", self.index, conversation_messages.lock().await.len());
+
+                        if !pending_messages.is_empty() {
+                            let mut messages = conversation_messages.lock().await;
+                            messages.push(serde_json::json!({
+                                "role": "assistant",
+                                "content": "notice there is a user input ?"
+                            }));
+
+                            let bundled_content = pending_messages.join("\n");
+                            pending_messages.clear();
+                            messages.push(serde_json::json!({
+                                "role": "user",
+                                "content": bundled_content
+                            }));
+                        }
+
+                        if let Err(e) = self.send_conversation(bus, &conversation_messages.lock().await, &tool_defs).await {
+                            error!("Failed to send tool timeout results to LLM: {}", e);
                         }
                     }
                 }
