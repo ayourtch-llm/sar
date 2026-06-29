@@ -70,6 +70,34 @@ pub struct StreamStats {
     pub rx_chars: usize,
 }
 
+struct ToolCallAccumulator {
+    name: String,
+    args: String,
+    call_id: String,
+}
+
+impl ToolCallAccumulator {
+    fn new() -> Self {
+        Self {
+            name: String::new(),
+            args: String::new(),
+            call_id: String::new(),
+        }
+    }
+
+    fn push_name(&mut self, name: &str) {
+        self.name.push_str(name);
+    }
+
+    fn push_args(&mut self, args: &str) {
+        self.args.push_str(args);
+    }
+
+    fn push_call_id(&mut self, call_id: &str) {
+        self.call_id.push_str(call_id);
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct LlmActor {
     pub index: usize,
@@ -237,7 +265,7 @@ impl LlmActor {
         let mut stream = response.bytes_stream();
         let mut rx_chars: usize = 0;
         let mut tool_calls: Vec<serde_json::Value> = Vec::new();
-        let mut tool_call_accumulators: std::collections::HashMap<usize, (String, String, String)> = std::collections::HashMap::new();
+        let mut tool_call_accumulators: std::collections::HashMap<usize, ToolCallAccumulator> = std::collections::HashMap::new();
         let stream_timeout = Duration::from_secs(config.stream_timeout_secs);
 
         loop {
@@ -316,25 +344,25 @@ impl LlmActor {
                                             let name = tool_call["function"]["name"].as_str().unwrap_or("");
                                             let args = tool_call["function"]["arguments"].as_str().unwrap_or("");
                                             let call_id = tool_call["id"].as_str().unwrap_or("");
+                                            let entry = tool_call_accumulators.entry(idx).or_insert_with(ToolCallAccumulator::new);
                                             if !name.is_empty() {
-                                                tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).0.push_str(name);
+                                                entry.push_name(name);
                                             }
                                             if !args.is_empty() {
-                                                tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).1.push_str(args);
+                                                entry.push_args(args);
                                             }
                                             if !call_id.is_empty() {
-                                                tool_call_accumulators.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new())).2.push_str(call_id);
+                                                entry.push_call_id(call_id);
                                             }
-                                            let (func_name, func_args, func_call_id) = tool_call_accumulators.get(&idx).unwrap();
                                             let tc_msg = Message::new(
                                                 &self.tool_calls_topic,
                                                 &self.id(),
                                                 serde_json::json!({
                                                     "index": idx,
-                                                    "id": func_call_id,
+                                                    "id": entry.call_id,
                                                     "function": {
-                                                        "name": func_name,
-                                                        "arguments": func_args,
+                                                        "name": entry.name,
+                                                        "arguments": entry.args,
                                                     }
                                                 }),
                                             ).with_type("LlmToolCall").with_stream_id(stream_id.to_string());
@@ -346,10 +374,10 @@ impl LlmActor {
                                                 &self.id(),
                                                 serde_json::json!({
                                                     "index": idx,
-                                                    "id": func_call_id,
+                                                    "id": entry.call_id,
                                                     "function": {
-                                                        "name": func_name,
-                                                        "arguments": func_args,
+                                                        "name": entry.name,
+                                                        "arguments": entry.args,
                                                     }
                                                 }),
                                             ).with_type("LlmToolCall").with_stream_id(stream_id.to_string());
@@ -384,16 +412,16 @@ impl LlmActor {
         // Normal stream completion — publish stream end and stats
         self.publish_stream_end_and_stats(bus, stream_id, rx_chars).await;
 
-        for (idx, (func_name, func_args, func_call_id)) in &tool_call_accumulators {
+        for (idx, entry) in &tool_call_accumulators {
             let full_tc = serde_json::json!({
-                "id": func_call_id,
+                "id": entry.call_id,
                 "type": "function",
                 "function": {
-                    "name": func_name,
-                    "arguments": func_args,
+                    "name": entry.name,
+                    "arguments": entry.args,
                 }
             });
-            info!("LLM actor {} accumulated tool call {}: {}", self.index, idx, func_name);
+            info!("LLM actor {} accumulated tool call {}: {}", self.index, idx, entry.name);
             tool_calls.push(full_tc);
         }
 
