@@ -67,7 +67,7 @@ pub struct LlmRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamStats {
-    pub rxtokens: usize,
+    pub rx_chars: usize,
 }
 
 #[derive(Debug, Default)]
@@ -203,7 +203,7 @@ impl LlmActor {
         }
     }
 
-    async fn publish_stream_end_and_stats(&self, bus: &SarBus, stream_id: &str, rxtokens: usize) {
+    async fn publish_stream_end_and_stats(&self, bus: &SarBus, stream_id: &str, rx_chars: usize) {
         let end_msg = Message::new(
             &self.stream_topic,
             &self.id(),
@@ -213,11 +213,11 @@ impl LlmActor {
             error!("Failed to publish stream end: {}", e);
         }
 
-        info!("LLM actor {} publishing stats: rxtokens={}", self.index, rxtokens);
+        info!("LLM actor {} publishing stats: rx_chars={}", self.index, rx_chars);
         let stats_msg = Message::new(
             &self.stats_topic,
             &self.id(),
-            serde_json::to_value(&StreamStats { rxtokens }).unwrap(),
+            serde_json::to_value(&StreamStats { rx_chars }).unwrap(),
         ).with_type("StreamStats").with_stream_id(stream_id.to_string());
         if let Err(e) = bus.publish(&self.id(), stats_msg).await {
             error!("Failed to publish stream stats: {}", e);
@@ -235,7 +235,7 @@ impl LlmActor {
     ) -> Result<(String, Vec<serde_json::Value>), LlmError> {
         let mut full_response = String::new();
         let mut stream = response.bytes_stream();
-        let mut rxtokens: usize = 0;
+        let mut rx_chars: usize = 0;
         let mut tool_calls: Vec<serde_json::Value> = Vec::new();
         let mut tool_call_accumulators: std::collections::HashMap<usize, (String, String, String)> = std::collections::HashMap::new();
         let stream_timeout = Duration::from_secs(config.stream_timeout_secs);
@@ -252,7 +252,7 @@ impl LlmActor {
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
                                 if let Some(reasoning) = json["choices"][0]["delta"]["reasoning_content"].as_str() {
                                     if !reasoning.is_empty() {
-                                        rxtokens += reasoning.chars().count();
+                                        rx_chars += reasoning.chars().count();
                                         let chunk_msg = Message::new(
                                             &self.stream_topic,
                                             &self.id(),
@@ -265,7 +265,7 @@ impl LlmActor {
                                 }
                                 if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
                                     if !content.is_empty() {
-                                        rxtokens += content.chars().count();
+                                        rx_chars += content.chars().count();
                                         let mut remaining = content.to_string();
                                         while let Some(think_start) = remaining.find("<thinking>") {
                                             let thinking_content = &remaining[..think_start];
@@ -365,7 +365,7 @@ impl LlmActor {
                 }
                 Ok(Some(Err(e))) => {
                     error!("[llm{}] Stream error: {}", self.index, e);
-                    self.publish_stream_end_and_stats(bus, stream_id, rxtokens).await;
+                    self.publish_stream_end_and_stats(bus, stream_id, rx_chars).await;
                     return Err(LlmError::StreamInterrupted(full_response.len(), e.to_string()));
                 }
                 Ok(None) => {
@@ -375,14 +375,14 @@ impl LlmActor {
                 Err(_) => {
                     warn!("[llm{}] Stream timed out after {}s (partial response length: {})",
                           self.index, config.stream_timeout_secs, full_response.len());
-                    self.publish_stream_end_and_stats(bus, stream_id, rxtokens).await;
+                    self.publish_stream_end_and_stats(bus, stream_id, rx_chars).await;
                     return Err(LlmError::StreamInterrupted(full_response.len(), "stream timeout".to_string()));
                 }
             }
         }
 
         // Normal stream completion — publish stream end and stats
-        self.publish_stream_end_and_stats(bus, stream_id, rxtokens).await;
+        self.publish_stream_end_and_stats(bus, stream_id, rx_chars).await;
 
         for (idx, (func_name, func_args, func_call_id)) in &tool_call_accumulators {
             let full_tc = serde_json::json!({
