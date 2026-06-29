@@ -398,7 +398,8 @@ impl LlmActor {
         }
 
         let response_summary = if full_response.len() > 200 {
-            format!("{}...", &full_response[..197])
+            let truncated: String = full_response.chars().take(197).collect();
+            format!("{}...", truncated)
         } else {
             full_response.clone()
         };
