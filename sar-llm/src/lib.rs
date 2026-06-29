@@ -411,6 +411,13 @@ impl LlmActor {
     }
 
     async fn send_request(&self, config: &LlmConfig, messages: &[serde_json::Value], tools: Option<&[serde_json::Value]>, grammar: Option<&str>, bus: &SarBus) -> Result<(String, Vec<serde_json::Value>), Box<dyn std::error::Error + Send + Sync>> {
+        if config.model.is_empty() {
+            return Err("LLM model name is empty".into());
+        }
+        if config.api_key.is_empty() {
+            return Err("LLM API key is empty".into());
+        }
+
         let stream_id = uuid::Uuid::new_v4().to_string();
         let body = self.build_request_body(config, messages, tools, grammar);
 
