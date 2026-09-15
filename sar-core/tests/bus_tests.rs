@@ -3,6 +3,7 @@ use sar_core::{Message, SarBus};
 #[tokio::test]
 async fn test_bus_new_empty() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     let topics = bus.list_topics().await;
     assert!(topics.is_empty());
 }
@@ -10,6 +11,7 @@ async fn test_bus_new_empty() {
 #[tokio::test]
 async fn test_bus_create_topic() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:topic", 100).await;
     let topics = bus.list_topics().await;
     assert_eq!(topics.len(), 1);
@@ -19,6 +21,7 @@ async fn test_bus_create_topic() {
 #[tokio::test]
 async fn test_bus_create_topic_idempotent() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:topic", 100).await;
     bus.create_topic("test:topic", 200).await;
     let topics = bus.list_topics().await;
@@ -28,6 +31,7 @@ async fn test_bus_create_topic_idempotent() {
 #[tokio::test]
 async fn test_bus_create_multiple_topics() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("topic:1", 10).await;
     bus.create_topic("topic:2", 20).await;
     bus.create_topic("topic:3", 30).await;
@@ -39,6 +43,7 @@ async fn test_bus_create_multiple_topics() {
 #[tokio::test]
 async fn test_bus_publish_and_subscribe() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:pubsub", 100).await;
     
     let mut rx = bus.subscribe("test", "test:pubsub").await.unwrap();
@@ -53,6 +58,7 @@ async fn test_bus_publish_and_subscribe() {
 #[tokio::test]
 async fn test_bus_publish_to_unknown_topic_auto_creates() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     let msg = Message::text("unknown:topic", "sender", "data");
     let result = bus.publish("test", msg).await;
     assert!(result.is_ok());
@@ -63,6 +69,7 @@ async fn test_bus_publish_to_unknown_topic_auto_creates() {
 #[tokio::test]
 async fn test_bus_subscribe_to_unknown_topic_auto_creates() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     let result = bus.subscribe("test", "unknown:topic").await;
     assert!(result.is_ok());
     let topics = bus.list_topics().await;
@@ -72,6 +79,7 @@ async fn test_bus_subscribe_to_unknown_topic_auto_creates() {
 #[tokio::test]
 async fn test_bus_multiple_subscribers() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:multi", 100).await;
     
     let mut rx1 = bus.subscribe("test", "test:multi").await.unwrap();
@@ -90,6 +98,7 @@ async fn test_bus_multiple_subscribers() {
 #[tokio::test]
 async fn test_bus_clone_shares_topics() {
     let bus1 = SarBus::new();
+    bus1.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus1.create_topic("shared:topic", 50).await;
     
     let bus2 = bus1.clone();
@@ -104,6 +113,7 @@ async fn test_bus_clone_shares_topics() {
 #[tokio::test]
 async fn test_bus_clone_can_subscribe() {
     let bus1 = SarBus::new();
+    bus1.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus1.create_topic("clone:test", 100).await;
     
     let bus2 = bus1.clone();
@@ -119,6 +129,7 @@ async fn test_bus_clone_can_subscribe() {
 #[tokio::test]
 async fn test_bus_publish_no_subscribers() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:nosub", 100).await;
     
     let msg = Message::text("test:nosub", "sender", "no listeners");
@@ -129,6 +140,7 @@ async fn test_bus_publish_no_subscribers() {
 #[tokio::test]
 async fn test_bus_lagged_receiver() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:lag", 5).await;
     
     let mut rx = bus.subscribe("test", "test:lag").await.unwrap();
@@ -154,6 +166,7 @@ async fn test_bus_lagged_receiver() {
 #[tokio::test]
 async fn test_bus_message_format() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:format", 100).await;
     
     let mut rx = bus.subscribe("test", "test:format").await.unwrap();

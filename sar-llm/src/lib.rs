@@ -262,6 +262,7 @@ impl LlmActor {
         stream_id: &str,
     ) -> Result<(String, Vec<serde_json::Value>), LlmError> {
         let mut full_response = String::new();
+        let mut byte_buffer = Vec::new();
         let mut stream = response.bytes_stream();
         let mut rx_chars: usize = 0;
         let mut tool_calls: Vec<serde_json::Value> = Vec::new();
@@ -271,8 +272,16 @@ impl LlmActor {
         loop {
             match tokio::time::timeout(stream_timeout, stream.next()).await {
                 Ok(Some(Ok(chunk))) => {
-                    let text = String::from_utf8_lossy(&chunk);
-                    for line in text.lines() {
+                    byte_buffer.extend_from_slice(&chunk);
+                    // Decode only complete SSE lines. Partial lines, including split
+                    // UTF-8 characters, remain as bytes until the next chunk arrives.
+                    let Some(last_newline) = byte_buffer.iter().rposition(|&b| b == b'\n') else {
+                        continue;
+                    };
+                    let complete_lines: Vec<u8> = byte_buffer.drain(..=last_newline).collect();
+                    for line_bytes in complete_lines.split(|&b| b == b'\n') {
+                        let line = String::from_utf8_lossy(line_bytes);
+                        let line = line.strip_suffix('\r').unwrap_or(&line);
                         if let Some(data) = line.strip_prefix("data: ") {
                             if data == "[DONE]" {
                                 continue;
@@ -510,14 +519,17 @@ impl Actor for LlmActor {
                             info!("[llm{}] Control branch ready (with active request)", self.index);
                             control_msg
                         }
-                        request_result = async {
-                            if let Some(handle) = req_handle_opt.take() {
-                                handle.await
-                            } else {
-                                std::future::pending().await
+                        request_result = std::future::poll_fn(|cx| {
+                            // Poll the handle WITHOUT consuming it: the handle stays in
+                            // req_handle_opt across select iterations, so a control message
+                            // arriving mid-request no longer detaches the request task.
+                            match req_handle_opt.as_mut() {
+                                Some(handle) => std::pin::Pin::new(handle).poll(cx),
+                                None => std::task::Poll::Pending,
                             }
-                        } => {
+                        }) => {
                             info!("[llm{}] Request task completed", self.index);
+                            req_handle_opt.take(); // request finished — clear the slot
                             match request_result {
                                 Ok(Ok((full_response, tool_calls))) => {
                                     info!("[llm{}] Request succeeded, tool_calls={}", self.index, tool_calls.len());
@@ -607,10 +619,9 @@ impl Actor for LlmActor {
                             break;
                         }
                     }
-                    // Put request back for next select! iteration
-                    if let Some(handle) = req_handle_opt.take() {
-                        active_request = Some(handle);
-                    }
+                    // Return the (still-pending) handle to the outer state for the next
+                    // select iteration (None if the request already completed/was aborted)
+                    active_request = req_handle_opt.take();
                     break;
                 }
             } else {
@@ -686,17 +697,8 @@ impl Actor for LlmActor {
                                         if type_str == "interrupt" {
                                             let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("interrupted");
                                             info!("[llm{}] Processing interrupt, reason='{}'", self.index, reason);
-                                            info!("[llm{}] No active request to abort", self.index);
-                                            info!("[llm{}] Publishing interrupt error to output topic", self.index);
-                                            let error_msg = Message::new(
-                                                &self.output_topic,
-                                                &self.id(),
-                                                format!("Interrupted: {}", reason),
-                                            );
-                                            if let Err(e) = bus.publish(&self.id(), error_msg).await {
-                                                error!("[llm{}] Failed to publish interrupt error: {}", self.index, e);
-                                            }
-                                            info!("[llm{}] Interrupt error published, continuing to listen", self.index);
+                                            info!("[llm{}] No active request to abort — ignoring interrupt (no fake turn published)", self.index);
+                                            debug!("[llm{}] interrupt with no active request, reason='{}'", self.index, reason);
                                         }
                                     }
                                 }

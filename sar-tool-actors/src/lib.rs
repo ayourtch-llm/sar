@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Structured representation of a tool's OpenAI-compatible function definition.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -179,42 +179,74 @@ impl ToolActorRunner {
                     let args = exec_msg.arguments.clone();
                     let call_id = exec_msg.tool_call_id.clone();
 
-                    let exec_handle = tokio::spawn(async move {
+                    let mut exec_handle = tokio::spawn(async move {
                         actor.execute_tool(&args).await
                     });
 
                     if let Some(ref mut control_rx) = control_rx {
                         let abort_handle = exec_handle.abort_handle();
-                        tokio::select! {
-                            result = exec_handle => {
-                                match result {
-                                    Ok(tool_result) => {
-                                        let (success, result, error) = match tool_result {
-                                            Ok(r) => (true, r, None),
-                                            Err(e) => (false, String::new(), Some(e)),
-                                        };
-                                        self.publish_result(bus, &results_topic, &call_id, success, result, error).await;
-                                    }
-                                    Err(e) => {
-                                        error!("Tool execution task panicked: {}", e);
-                                        self.publish_result(bus, &results_topic, &call_id, false, String::new(), Some("Task panicked".to_string())).await;
-                                    }
-                                }
-                            }
-                            control_msg = control_rx.recv() => {
-                                match control_msg {
-                                    Ok(msg) => {
-                                        if let Ok(v) = serde_json::from_value::<serde_json::Value>(msg.payload) {
-                                            if v.get("type").and_then(|t| t.as_str()) == Some("continue") {
-                                                let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("");
-                                                abort_handle.abort();
-                                                info!("Tool '{}' cancelled: {}", self.tool_name, reason);
-                                                self.publish_result(bus, &results_topic, &call_id, false, String::new(), Some(format!("Cancelled: {}", reason))).await;
-                                            }
+                        // Loop the select: a control message that does NOT target this
+                        // execution (different tool_call_id) must not detach the running
+                        // task — keep selecting until the task completes or is cancelled.
+                        loop {
+                            tokio::select! {
+                                result = &mut exec_handle => {
+                                    match result {
+                                        Ok(tool_result) => {
+                                            let (success, result, error) = match tool_result {
+                                                Ok(r) => (true, r, None),
+                                                Err(e) => (false, String::new(), Some(e)),
+                                            };
+                                            self.publish_result(bus, &results_topic, &call_id, success, result, error).await;
+                                        }
+                                        Err(e) => {
+                                            error!("Tool execution task panicked: {}", e);
+                                            self.publish_result(bus, &results_topic, &call_id, false, String::new(), Some("Task panicked".to_string())).await;
                                         }
                                     }
-                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                                    break;
+                                }
+                                control_msg = control_rx.recv() => {
+                                    match control_msg {
+                                        Ok(msg) => {
+                                            if let Ok(v) = serde_json::from_value::<serde_json::Value>(msg.payload) {
+                                                if v.get("type").and_then(|t| t.as_str()) == Some("continue") {
+                                                    let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("");
+                                                    // Only cancel when the control message targets THIS call;
+                                                    // absent tool_call_id = legacy control = cancel anyway.
+                                                    let targets_this_call = v.get("tool_call_id")
+                                                        .and_then(|id| id.as_str())
+                                                        .map(|id| id == call_id)
+                                                        .unwrap_or(true);
+                                                    if targets_this_call {
+                                                        abort_handle.abort();
+                                                        info!("Tool '{}' call '{}' cancelled: {}", self.tool_name, call_id, reason);
+                                                        if let Err(je) = exec_handle.await {
+                                                            error!("Tool '{}' cancelled task join: {}", self.tool_name, je);
+                                                        }
+                                                        self.publish_result(bus, &results_topic, &call_id, false, String::new(), Some(format!("Cancelled: {}", reason))).await;
+                                                        break;
+                                                    } else {
+                                                        debug!("Tool '{}' ignoring control for a different tool_call_id", self.tool_name);
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                            // Control channel gone: await the task inline (no detached panic)
+                                            match (&mut exec_handle).await {
+                                                Ok(Ok(_)) => {}
+                                                Ok(Err(_)) => {}
+                                                Err(e) => {
+                                                    error!("Tool execution task panicked after control close: {}", e);
+                                                    self.publish_result(bus, &results_topic, &call_id, false, String::new(), Some("Task panicked".to_string())).await;
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                         }

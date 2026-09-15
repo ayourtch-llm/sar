@@ -10,6 +10,7 @@ async fn test_llm_test_actor_publishes_to_llm() {
         .await;
 
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:input", 100).await;
     bus.create_topic("test:llm:in", 100).await;
     bus.create_topic("test:llm:out", 1000).await;
@@ -20,6 +21,9 @@ async fn test_llm_test_actor_publishes_to_llm() {
         "test:llm:in".to_string(),
         "test:llm:out".to_string(),
         "test:llm:stream".to_string(),
+        "test:llm:stats".to_string(),
+        "test:llm:tool_calls".to_string(),
+        "user:control".to_string(),
         sar_core::config::LlmConfig {
             model: "gpt-4o-mini".to_string(),
             base_url: mock.url(),
@@ -39,6 +43,7 @@ async fn test_llm_test_actor_publishes_to_llm() {
         "test:llm:in".to_string(),
         "test:llm:out".to_string(),
         "test:llm:stream".to_string(),
+        "test:stream:out".to_string(),
     );
 
     let _test_handle = bus.spawn_actor(test_actor).await.unwrap();
@@ -64,6 +69,7 @@ async fn test_llm_test_actor_receives_output() {
         .await;
 
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:input2", 100).await;
     bus.create_topic("test:llm:in2", 100).await;
     bus.create_topic("test:llm:out2", 1000).await;
@@ -76,6 +82,9 @@ async fn test_llm_test_actor_receives_output() {
         "test:llm:in2".to_string(),
         "test:llm:out2".to_string(),
         "test:llm:stream2".to_string(),
+        "test:llm:stats".to_string(),
+        "test:llm:tool_calls".to_string(),
+        "user:control".to_string(),
         sar_core::config::LlmConfig {
             model: "gpt-4o-mini".to_string(),
             base_url: mock.url(),
@@ -95,6 +104,7 @@ async fn test_llm_test_actor_receives_output() {
         "test:llm:in2".to_string(),
         "test:llm:out2".to_string(),
         "test:llm:stream2".to_string(),
+        "test:stream:out".to_string(),
     );
 
     let _test_handle = bus.spawn_actor(test_actor).await.unwrap();
@@ -120,6 +130,7 @@ async fn test_llm_test_actor_receives_stream() {
         .await;
 
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:input3", 100).await;
     bus.create_topic("test:llm:in3", 100).await;
     bus.create_topic("test:llm:out3", 1000).await;
@@ -132,6 +143,9 @@ async fn test_llm_test_actor_receives_stream() {
         "test:llm:in3".to_string(),
         "test:llm:out3".to_string(),
         "test:llm:stream3".to_string(),
+        "test:llm:stats".to_string(),
+        "test:llm:tool_calls".to_string(),
+        "user:control".to_string(),
         sar_core::config::LlmConfig {
             model: "gpt-4o-mini".to_string(),
             base_url: mock.url(),
@@ -151,6 +165,7 @@ async fn test_llm_test_actor_receives_stream() {
         "test:llm:in3".to_string(),
         "test:llm:out3".to_string(),
         "test:llm:stream3".to_string(),
+        "test:stream:out".to_string(),
     );
 
     let _test_handle = bus.spawn_actor(test_actor).await.unwrap();
@@ -196,6 +211,7 @@ async fn test_llm_test_actor_multiple_requests() {
         .await;
 
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:input4", 100).await;
     bus.create_topic("test:llm:in4", 100).await;
     bus.create_topic("test:llm:out4", 1000).await;
@@ -208,6 +224,9 @@ async fn test_llm_test_actor_multiple_requests() {
         "test:llm:in4".to_string(),
         "test:llm:out4".to_string(),
         "test:llm:stream4".to_string(),
+        "test:llm:stats".to_string(),
+        "test:llm:tool_calls".to_string(),
+        "user:control".to_string(),
         sar_core::config::LlmConfig {
             model: "gpt-4o-mini".to_string(),
             base_url: mock.url(),
@@ -227,6 +246,7 @@ async fn test_llm_test_actor_multiple_requests() {
         "test:llm:in4".to_string(),
         "test:llm:out4".to_string(),
         "test:llm:stream4".to_string(),
+        "test:stream:out".to_string(),
     );
 
     let _test_handle = bus.spawn_actor(test_actor).await.unwrap();

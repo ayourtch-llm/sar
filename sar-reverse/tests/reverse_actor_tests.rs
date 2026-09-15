@@ -10,6 +10,7 @@ async fn test_reverse_actor_id() {
 #[tokio::test]
 async fn test_reverse_actor_reverses_text() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:input", 100).await;
     bus.create_topic("test:log", 100).await;
     
@@ -33,6 +34,7 @@ async fn test_reverse_actor_reverses_text() {
 #[tokio::test]
 async fn test_reverse_actor_reverses_longer_text() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:input2", 100).await;
     bus.create_topic("test:log2", 100).await;
     
@@ -55,6 +57,7 @@ async fn test_reverse_actor_reverses_longer_text() {
 #[tokio::test]
 async fn test_reverse_actor_multiple_messages() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:input3", 100).await;
     bus.create_topic("test:log3", 100).await;
     
@@ -90,6 +93,7 @@ async fn test_reverse_actor_multiple_messages() {
 #[tokio::test]
 async fn test_reverse_actor_with_non_string_payload() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:input4", 100).await;
     bus.create_topic("test:log4", 100).await;
     

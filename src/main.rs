@@ -35,7 +35,10 @@ impl<'a> MakeWriter<'a> for LogWriter {
             Some(path) => {
                 match File::options().append(true).create(true).open(path) {
                     Ok(file) => Box::new(file),
-                    Err(e) => panic!("Failed to open log file '{}': {}", path.display(), e),
+                    Err(e) => {
+                        eprintln!("WARNING: cannot open log file '{}': {} — logging to sink", path.display(), e);
+                        Box::new(std::io::sink())
+                    }
                 }
             }
             None => Box::new(std::io::sink()),
@@ -141,7 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let subscriber = subscriber.with(bus_layer);
     tracing::subscriber::set_global_default(subscriber)?;
 
-    info!("Starting SAR with config: {:?}", config);
+    info!("Starting SAR: model={} base_url={}", config.llm.model, config.llm.base_url);
     info!("Topics initialized: {:?}", (*bus).list_topics().await);
 
     // Spawn echo actor

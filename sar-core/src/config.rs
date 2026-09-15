@@ -30,7 +30,6 @@ impl Default for Config {
             input_topic: "ui:input".to_string(),
             buffer_size: 1000,
             subscribe_to: vec![
-                "sar:log".to_string(),
                 "sar:echo".to_string(),
                 "sar:reverse".to_string(),
                 "llm-test:0:stream".to_string(),
