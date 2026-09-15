@@ -6,6 +6,10 @@ use tower::ServiceExt;
 
 async fn setup_test_app() -> (Router, SarBus) {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
+    // Mirror production run_server (server.rs:210): the HTTP layer publishes as "sar-server".
+    // Without this announcement every /publish hits UnannouncedActor -> 400 (fold item 1.7, runtime half).
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "sar-server".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:topic", 100).await;
     
     let app: Router = Router::new()

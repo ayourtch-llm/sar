@@ -3,7 +3,7 @@ use sar_core::bus::SarBus;
 use sar_core::message::Message;
 use sar_core::config::UiHubConfig;
 use tokio::sync::broadcast;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub const USER_CONTROL_TOPIC: &str = "user:control";
 pub const GRAMMAR_TOPIC: &str = "llm-test-tools:0:grammar";
@@ -145,21 +145,21 @@ impl Actor for UiHubActor {
                                 continue;
                             }
                             let msg_type = classify_message(&topic_clone, &msg.payload, &msg.meta);
-                            info!("UI hub '{}' forwarder received from '{}': type={}, payload={}", hub_name, topic_clone, msg_type, msg.payload);
+                            debug!("UI hub '{}' forwarder received from '{}': type={}, payload={}", hub_name, topic_clone, msg_type, msg.payload);
                             let mut forwarded = msg.clone();
                             forwarded.topic = user_topic.clone();
                             forwarded.meta = serde_json::json!({"type": msg_type});
                             if let Err(e) = bus.publish(&hub_id, forwarded).await {
                                 error!("UI hub '{}' failed to publish to user topic: {}", hub_name, e);
                             } else {
-                                info!("UI hub '{}' forwarded to '{}'", hub_name, user_topic);
+                                debug!("UI hub '{}' forwarded to '{}'", hub_name, user_topic);
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("UI hub '{}' forwarder for '{}' lagged behind, dropped {} messages", hub_name, topic_clone, n);
                         }
                         Err(broadcast::error::RecvError::Closed) => {
-                            info!("UI hub '{}' producer topic '{}' closed", hub_name, topic_clone);
+                            debug!("UI hub '{}' producer topic '{}' closed", hub_name, topic_clone);
                             break;
                         }
                     }

@@ -238,7 +238,8 @@ impl McpServerRunner {
         bus: &SarBus,
     ) -> std::result::Result<McpServerHandle, Box<dyn std::error::Error + Send + Sync>> {
         let cmd = {
-            let mut c = tokio::process::Command::new(&self.config.command[0]);
+            let cmd0 = self.config.command.first().ok_or("MCP server config has empty command")?;
+            let mut c = tokio::process::Command::new(cmd0);
             c.args(&self.config.command[1..]);
             c
         };

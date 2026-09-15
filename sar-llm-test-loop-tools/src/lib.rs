@@ -501,6 +501,45 @@ impl Actor for LlmTestLoopToolsActor {
                                 pending_tool_call_timestamps.insert(tool_call_id.to_string(), (Instant::now(), tc["function"]["name"].as_str().unwrap_or("").to_string()));
 
                                 let func_name = tc["function"]["name"].as_str().unwrap_or("");
+
+                                // Fix 1.3: validate the requested tool against the registered
+                                // tools BEFORE spawning execution. An unknown name used to
+                                // publish to a topic nobody subscribes to, leaving the call
+                                // pending forever (agent hang).
+                                let known = self
+                                    .tools
+                                    .lock()
+                                    .unwrap()
+                                    .iter()
+                                    .any(|t| t.tool_syntax().name == func_name);
+                                if !known {
+                                    warn!(
+                                        "LLM test loop tools actor {} rejecting unknown tool '{}' (call_id '{}')",
+                                        self.index, func_name, tool_call_id
+                                    );
+                                    // Keep this call pending until its error result is
+                                    // consumed, so a batch of unknown calls resolves once.
+                                    let error_result = ToolResultMessage {
+                                        tool_call_id: tool_call_id.to_string(),
+                                        tool_name: func_name.to_string(),
+                                        success: false,
+                                        result: String::new(),
+                                        error: Some(format!(
+                                            "Unknown tool '{}' (not registered with this actor)",
+                                            func_name
+                                        )),
+                                    };
+                                    let result_msg = Message::new(
+                                        TOOLS_RESULTS_TOPIC,
+                                        &self.id(),
+                                        serde_json::to_value(&error_result).unwrap(),
+                                    );
+                                    if let Err(e) = bus.publish(&self.id(), result_msg).await {
+                                        error!("Failed to publish unknown-tool error result: {}", e);
+                                    }
+                                    continue;
+                                }
+
                                 let func_args_str = tc["function"]["arguments"].as_str().unwrap_or("");
 
                                 info!("LLM test loop tools actor {} publishing tool call: {}({})", self.index, func_name, func_args_str);

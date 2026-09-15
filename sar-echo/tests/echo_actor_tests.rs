@@ -10,6 +10,7 @@ async fn test_echo_actor_id() {
 #[tokio::test]
 async fn test_echo_actor_receives_and_publishes() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:input", 100).await;
     bus.create_topic("test:log", 100).await;
     
@@ -33,6 +34,7 @@ async fn test_echo_actor_receives_and_publishes() {
 #[tokio::test]
 async fn test_echo_actor_multiple_messages() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:input2", 100).await;
     bus.create_topic("test:log2", 100).await;
     
@@ -62,6 +64,7 @@ async fn test_echo_actor_multiple_messages() {
 #[tokio::test]
 async fn test_echo_actor_with_json_payload() {
     let bus = SarBus::new();
+    bus.register_announcement(sar_core::actor::ActorAnnouncement { id: "test".to_string(), subscriptions: vec![], publications: vec![] }).await;
     bus.create_topic("test:input3", 100).await;
     bus.create_topic("test:log3", 100).await;
     
