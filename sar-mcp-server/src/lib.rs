@@ -113,9 +113,13 @@ pub struct McpServerHandle {
     peer: Arc<Mutex<rmcp::Peer<RoleClient>>>,
     tools: Vec<Tool>,
     config: McpServerConfig,
+    cancellation: rmcp::service::RunningServiceCancellationToken,
 }
 
 impl McpServerHandle {
+    /// Close this client transport after an evaluation run.
+    pub fn shutdown(self) { self.cancellation.cancel(); }
+
     /// Get tool actors for tools that should be exposed to the LLM.
     pub fn tool_actors(&self) -> Vec<std::sync::Arc<dyn ToolActor>> {
         self.tools
@@ -241,6 +245,7 @@ impl McpServerRunner {
             let cmd0 = self.config.command.first().ok_or("MCP server config has empty command")?;
             let mut c = tokio::process::Command::new(cmd0);
             c.args(&self.config.command[1..]);
+            c.envs(&self.config.env);
             c
         };
         let (transport, stderr) = TokioChildProcess::builder(cmd).stderr(Stdio::piped()).spawn()?;
@@ -265,6 +270,7 @@ impl McpServerRunner {
         
         let service = McpClientHandler;
         let running_service: RunningService<RoleClient, McpClientHandler> = rmcp::serve_client(service, transport).await?;
+        let cancellation = running_service.cancellation_token();
         let peer = Arc::new(Mutex::new(running_service.peer().clone()));
 
         info!(
@@ -307,6 +313,7 @@ impl McpServerRunner {
             peer,
             tools,
             config: self.config.clone(),
+            cancellation,
         })
     }
 }

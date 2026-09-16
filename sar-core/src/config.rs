@@ -192,6 +192,9 @@ impl Default for UiHubConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct McpServerConfig {
     pub command: Vec<String>,
+    /// Overrides added to the inherited process environment. Prefer inherited secrets.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
     #[serde(default)]
     pub default: bool,
     #[serde(default)]
