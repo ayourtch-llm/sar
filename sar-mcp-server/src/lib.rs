@@ -114,11 +114,15 @@ pub struct McpServerHandle {
     tools: Vec<Tool>,
     config: McpServerConfig,
     cancellation: rmcp::service::RunningServiceCancellationToken,
+    closed: tokio::sync::oneshot::Receiver<()>,
 }
 
 impl McpServerHandle {
     /// Close this client transport after an evaluation run.
-    pub fn shutdown(self) { self.cancellation.cancel(); }
+    pub async fn shutdown(self) {
+        self.cancellation.cancel();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.closed).await;
+    }
 
     /// Get tool actors for tools that should be exposed to the LLM.
     pub fn tool_actors(&self) -> Vec<std::sync::Arc<dyn ToolActor>> {
@@ -290,10 +294,12 @@ impl McpServerRunner {
         // Spawn the service loop in a background task so it stays alive.
         // RunningService::waiting() consumes the service and polls the transport loop.
         // As long as this JoinHandle is alive, the transport stays open.
+        let (closed_tx, closed) = tokio::sync::oneshot::channel();
         let service_handle = {
             let rs = running_service;
             tokio::spawn(async move {
                 let _ = rs.waiting().await;
+                let _ = closed_tx.send(());
             })
         };
 
@@ -314,6 +320,7 @@ impl McpServerRunner {
             tools,
             config: self.config.clone(),
             cancellation,
+            closed,
         })
     }
 }
