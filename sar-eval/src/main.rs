@@ -19,7 +19,7 @@ struct Args {
     eval: PathBuf,
     #[arg(long)]
     output: PathBuf,
-    #[arg(long, default_value = "direct", value_parser = ["direct"])]
+    #[arg(long, default_value = "direct", value_parser = ["direct", "loop"])]
     mode: String,
     #[arg(long, default_value = "llm_search")]
     server: String,
@@ -103,38 +103,51 @@ async fn main() -> Result<()> {
                 q.question, q.format_hint
             )
         };
-        let request = ToolExecuteMessage {
-            tool_call_id: call_id.clone(),
-            tool_name: "search".into(),
-            arguments: json!({"question":question,"max_steps":args.max_steps}),
-        };
-        let started = Instant::now();
-        eprintln!("question={} started mode={}", q.id, args.mode);
-        bus.publish(
-            "sar-eval",
-            Message::new(
-                "tool:search:execute",
+        let result = if args.mode == "loop" {
+            eprintln!("question={} started mode=loop", q.id);
+            sar_eval::loop_mode::run(
+                &bus,
+                handle.tool_actors(),
+                config.llm.clone(),
+                &question,
+                Duration::from_secs(args.question_timeout_secs),
+            )
+            .await?
+        } else {
+            let request = ToolExecuteMessage {
+                tool_call_id: call_id.clone(),
+                tool_name: "search".into(),
+                arguments: json!({"question":question,"max_steps":args.max_steps}),
+            };
+            let started = Instant::now();
+            eprintln!("question={} started mode={}", q.id, args.mode);
+            bus.publish(
                 "sar-eval",
-                serde_json::to_value(request)?,
-            ),
-        )
-        .await?;
-        let outcome =
-            tokio::time::timeout(Duration::from_secs(args.question_timeout_secs), async {
-                loop {
-                    let msg = rx.recv().await?;
-                    let response: ToolResultMessage = serde_json::from_value(msg.payload)?;
-                    if response.tool_call_id == call_id {
-                        return Ok::<_, anyhow::Error>(response);
+                Message::new(
+                    "tool:search:execute",
+                    "sar-eval",
+                    serde_json::to_value(request)?,
+                ),
+            )
+            .await?;
+            let outcome =
+                tokio::time::timeout(Duration::from_secs(args.question_timeout_secs), async {
+                    loop {
+                        let msg = rx.recv().await?;
+                        let response: ToolResultMessage = serde_json::from_value(msg.payload)?;
+                        if response.tool_call_id == call_id {
+                            return Ok::<_, anyhow::Error>(response);
+                        }
                     }
-                }
-            })
-            .await;
-        let result: Value = match outcome {
+                })
+                .await;
+            let result: Value = match outcome {
             Ok(Ok(r)) if r.success => serde_json::from_str(&r.result).unwrap_or_else(|_|json!({"status":"invalid_result","answer":"","error":"search result was not JSON"})),
             Ok(Ok(r)) => json!({"status":"mcp_error","answer":"","error":r.error}),
             Ok(Err(e)) => json!({"status":"bus_error","answer":"","error":e.to_string()}),
             Err(_) => json!({"status":"harness_timeout","answer":"","wall_ms":started.elapsed().as_millis()}),
+        };
+            result
         };
         handle.shutdown().await;
         let answer_matches = grade(&q, result["answer"].as_str().unwrap_or(""));
