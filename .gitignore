@@ -1,2 +1,5 @@
 /target
 /tmp
+.env*
+*.log
+cache/
