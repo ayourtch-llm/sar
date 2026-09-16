@@ -17,6 +17,7 @@ members = [
     "sar-tool-sleep",
     "sar-mcp-server",
     "sar-tool-mcp",
+    "sar-eval",
 ]
 resolver = "2"
 

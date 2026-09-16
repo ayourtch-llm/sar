@@ -150,3 +150,20 @@ curl -X POST http://127.0.0.1:3000/api/publish \
 | `/log <msg>` | Log a message |
 | `/list actors` | List actors |
 | `/list topics` | List topics |
+## Headless research evaluation
+
+The `sar-eval` workspace binary mounts a configured MCP server using `sar-tool-mcp`/`sar-mcp-server`, sends `ToolExecuteMessage` on `tool:search:execute`, and receives correlated results on `tool:results`. No TUI or outer LLM runs in direct mode.
+
+```sh
+cargo build --workspace
+cargo test --workspace
+cargo run -p sar-eval -- --config /path/to/config.toml \
+  --eval /path/to/questions.json --output /path/to/results.json \
+  --mode direct --question-timeout-secs 1200 --max-steps 24
+```
+
+The selected `[mcp_servers.llm_search]` entry uses a `command` array containing the executable and arguments. An optional `[mcp_servers.llm_search.env]` table adds environment overrides; existing environment variables are inherited. Keep API keys in the inherited environment rather than checked-in TOML. `[llm]` remains available to the interactive SAR caller; direct evaluation uses the inner model configured in the MCP server command.
+
+Evaluation input is a JSON array with `id`, `question`, `ground_truth`, `source_url`, and `grader` (`normalized_exact_match` or `accepted_aliases`), plus optional `aliases`, `format_hint`, and `search_required`. The grader compares the entire normalized answer (Unicode decomposition, case, punctuation, whitespace); aliases must be declared in advance. A correct result must finish with `final_answer`, and `search_required` requires at least one search attempt. The harness writes JSON and a sibling Markdown table after each question. Metrics include steps, searches, fetches, prompt/completion tokens, wall time, and live Tavily calls. Runtime context and failure traces come from the MCP result.
+
+Each question starts a fresh MCP process and bus to isolate timeouts; persistent caching is controlled by the server's `--cache-dir`. The harness waits for the actual tool subscription before publishing and closes the MCP transport after each question. Use a server timeout slightly below the harness cap to preserve inner timeout traces. `--mode direct` is the supported evaluation mode.
