@@ -122,3 +122,5 @@ mod tests {
         );
     }
 }
+
+pub mod loop_mode;

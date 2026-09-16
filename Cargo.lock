@@ -1696,8 +1696,12 @@ name = "sar-eval"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "axum",
  "clap",
  "sar-core",
+ "sar-llm",
+ "sar-llm-test-loop-tools",
  "sar-tool-actors",
  "sar-tool-mcp",
  "serde",

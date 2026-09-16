@@ -78,6 +78,14 @@ impl LlmTestLoopToolsActor {
         }
     }
 
+    /// Set the upstream per-call watchdog timeout for long evaluation tools.
+    /// Round fractional seconds up so the watchdog never shortens the deadline.
+    pub fn with_tool_timeout(self, timeout: Duration) -> Self {
+        self.with_tool_timeout_secs(
+            timeout.as_secs().saturating_add(u64::from(timeout.subsec_nanos() != 0)),
+        )
+    }
+
     pub fn with_base_url(mut self, base_url: String) -> Self {
         self.llm_base_url = base_url;
         self
